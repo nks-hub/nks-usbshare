@@ -1,0 +1,47 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.user
+*.suo
+*.userprefs
+
+# Test and coverage output
+[Tt]est[Rr]esult*/
+coverage*.json
+coverage*.xml
+
+# Runtime state written by the app itself
+*.pfx
+*.key
+state/
+logs/
+
+# NuGet
+*.nupkg
+packages/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# JetBrains
+.idea/
+
+# CodeRush
+.cr/
+
+# Editor/IDE local configs
+.[a-z]*/
+!.git/
+!.github/
+!.vs/
+!.idea/
+!.cr/
+/[A-Z]*.md
+!/README.md
+!/LICENSE.md
+!/SECURITY.md

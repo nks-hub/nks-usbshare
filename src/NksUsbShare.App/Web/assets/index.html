@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NKS UsbShare</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<div class="shell">
+
+  <aside class="rail">
+    <div class="plate">
+      <div class="plate-mark">NKS</div>
+      <div class="plate-name" id="node-name">—</div>
+      <div class="plate-sub" id="node-platform">—</div>
+    </div>
+
+    <div class="signal" id="signal">
+      <span class="led" id="led"></span>
+      <span class="signal-text" id="signal-text">offline</span>
+      <button class="switch" id="host-toggle" type="button" aria-label="Toggle sharing"></button>
+    </div>
+
+    <dl class="facts">
+      <dt>Link port</dt>
+      <dd id="link-port">—</dd>
+      <dt>Reachable at</dt>
+      <dd id="addresses" class="addresses">—</dd>
+      <dt>Key fingerprint</dt>
+      <dd id="fingerprint" class="copyable" title="Click to copy">—</dd>
+    </dl>
+
+    <div class="token-block">
+      <div class="token-label">Pairing token</div>
+      <div class="token copyable" id="token" title="Click to copy">—</div>
+      <button class="ghost" id="token-new" type="button">Regenerate</button>
+      <p class="hint">A client needs this once, plus the address above.</p>
+    </div>
+
+    <button class="theme" id="theme-toggle" type="button" aria-label="Switch theme"></button>
+  </aside>
+
+  <main>
+    <section class="panel out">
+      <header>
+        <h2><span class="tick"></span>Shared from here</h2>
+        <span class="count" id="local-count">0</span>
+      </header>
+      <div class="rows" id="local-devices"></div>
+      <p class="empty" id="local-empty" hidden>No USB devices found on this machine.</p>
+    </section>
+
+    <section class="panel in">
+      <header>
+        <h2><span class="tick"></span>Imported from elsewhere</h2>
+        <span class="count" id="import-count">0</span>
+      </header>
+
+      <div class="hosts" id="hosts"></div>
+
+      <form class="add-host" id="add-host">
+        <input name="address" placeholder="host address" required autocomplete="off" spellcheck="false">
+        <input name="port" placeholder="port" value="57340" inputmode="numeric" size="6">
+        <input name="token" placeholder="pairing token" required autocomplete="off" spellcheck="false">
+        <button type="submit">Pair</button>
+      </form>
+
+      <div class="rows" id="imports"></div>
+    </section>
+
+    <section class="panel clients" id="clients-panel" hidden>
+      <header>
+        <h2><span class="tick"></span>Connected clients</h2>
+        <span class="count" id="client-count">0</span>
+      </header>
+      <div class="rows" id="clients"></div>
+    </section>
+  </main>
+
+</div>
+
+<footer class="console" id="console">
+  <button class="console-bar" id="console-toggle" type="button">
+    <span class="console-title">Activity</span>
+    <span class="console-last" id="console-last"></span>
+    <span class="chevron"></span>
+  </button>
+  <div class="console-body" id="log"></div>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<template id="device-row">
+  <article class="row">
+    <div class="port"></div>
+    <div class="ident">
+      <div class="name"></div>
+      <div class="meta"></div>
+    </div>
+    <div class="spec"></div>
+    <div class="action"></div>
+  </article>
+</template>
+
+<script src="/app.js"></script>
+</body>
+</html>

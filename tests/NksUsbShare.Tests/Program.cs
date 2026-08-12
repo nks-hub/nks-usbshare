@@ -10,6 +10,7 @@ ProtocolTests.Register();
 UsbTests.Register();
 SecurityTests.Register();
 EndToEndTests.Register();
+UsbIpTests.Register();
 LiveHardwareTests.Register();
 
 var filter = args.FirstOrDefault(a => !a.StartsWith('-'));

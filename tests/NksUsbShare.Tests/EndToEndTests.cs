@@ -14,63 +14,11 @@ namespace NksUsbShare.Tests;
 /// </summary>
 public static class EndToEndTests
 {
-    private sealed class Harness : IAsyncDisposable
-    {
-        public required NodeSettings Settings { get; init; }
-        public required HostServer Host { get; init; }
-        public required FakeUsbBackend Backend { get; init; }
-        public required NodeIdentity Identity { get; init; }
-        public required string StateDirectory { get; init; }
+    private static Task<EndToEndHarness> StartHostAsync(Action<NodeSettings>? configure = null)
+        => EndToEndHarness.StartAsync(configure);
 
-        public async ValueTask DisposeAsync()
-        {
-            await Host.DisposeAsync();
-            Identity.Certificate.Dispose();
-            if (Directory.Exists(StateDirectory)) Directory.Delete(StateDirectory, true);
-        }
-    }
-
-    private static async Task<Harness> StartHostAsync(Action<NodeSettings>? configure = null)
-    {
-        var stateDirectory = Path.Combine(Path.GetTempPath(), "nks-usbshare-e2e-" + Guid.NewGuid().ToString("N")[..8]);
-        var settings = NodeSettings.LoadOrCreate(stateDirectory);
-        settings.HostName = "test-host";
-        settings.LinkBindAddress = "127.0.0.1";
-        settings.LinkPort = 0; // let the OS pick a free port
-        settings.Shares.Add(new DeviceShare
-        {
-            DeviceId = FakeUsbBackend.FlashDriveId,
-            HardwareKey = FakeUsbBackend.FlashDrive.HardwareKey,
-            SerialNumber = FakeUsbBackend.FlashDrive.SerialNumber,
-            Label = "Test Flash Drive",
-            Enabled = true,
-        });
-        configure?.Invoke(settings);
-
-        var identity = NodeIdentity.LoadOrCreate(stateDirectory, "test-host");
-        var backend = new FakeUsbBackend();
-        var log = new ActivityLog();
-        var host = new HostServer(settings, identity, backend, log);
-        await host.StartAsync(CancellationToken.None);
-
-        return new Harness
-        {
-            Settings = settings,
-            Host = host,
-            Backend = backend,
-            Identity = identity,
-            StateDirectory = stateDirectory,
-        };
-    }
-
-    private static async Task<UsbShareClient> ConnectAsync(Harness harness, string? token = null)
-    {
-        var client = new UsbShareClient(new ActivityLog());
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        await client.ConnectAsync("127.0.0.1", harness.Host.Port, token ?? harness.Settings.PairingToken,
-            harness.Identity.Fingerprint, "test-client", null, timeout.Token);
-        return client;
-    }
+    private static Task<UsbShareClient> ConnectAsync(EndToEndHarness harness, string? token = null)
+        => harness.ConnectClientAsync(token);
 
     public static void Register()
     {

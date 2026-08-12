@@ -45,3 +45,6 @@ desktop.ini
 !/README.md
 !/LICENSE.md
 !/SECURITY.md
+
+# Published output
+publish/

@@ -13,7 +13,7 @@ if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
     return 1;
 }
 
-var settings = NodeSettings.LoadOrCreate();
+var settings = NodeSettings.LoadOrCreate(NodeSettings.StateDirectoryFromArguments(args));
 var log = new ActivityLog { EchoToConsole = true };
 var node = new NodeService(settings, log);
 

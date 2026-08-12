@@ -109,6 +109,19 @@ public sealed class NodeSettings
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create),
             "nks-usbshare");
 
+    /// <summary>
+    /// The state directory a command line asks for with <c>--home &lt;dir&gt;</c>, or null for the
+    /// usual per-user one. The windowed applications accept it as well as the terminal one, so a
+    /// second node can be run side by side without disturbing the real settings.
+    /// </summary>
+    public static string? StateDirectoryFromArguments(IReadOnlyList<string> arguments)
+    {
+        for (var index = 0; index < arguments.Count - 1; index++)
+            if (arguments[index] is "--home" or "-home") return arguments[index + 1];
+
+        return null;
+    }
+
     public static NodeSettings LoadOrCreate(string? stateDirectory = null)
     {
         var directory = stateDirectory ?? DefaultStateDirectory;

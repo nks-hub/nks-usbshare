@@ -136,6 +136,8 @@ internal sealed class WinUsbDeviceHandle : IUsbDeviceHandle
         if (request.Setup.Length < 8)
             return new UrbResult { UrbId = request.UrbId, Status = UrbStatus.IoError, Detail = "Control transfer without a SETUP packet." };
 
+        if (TryHandleLocally(request) is { } handled) return handled;
+
         var setup = new WinUsbSetupPacket
         {
             RequestType = request.Setup[0],
@@ -216,6 +218,65 @@ internal sealed class WinUsbDeviceHandle : IUsbDeviceHandle
         {
             _inFlight.TryRemove(request.UrbId, out _);
             gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Answers the standard requests that winusb.sys will not pass through, because it owns that
+    /// part of the device state itself.
+    ///
+    /// A remote host stack enumerating this device sends SET_CONFIGURATION, SET_INTERFACE and
+    /// CLEAR_FEATURE as ordinary control transfers. Forwarding them to WinUSB fails, so they are
+    /// translated into the equivalent WinUSB calls, or acknowledged when the device is already in
+    /// the requested state. Returns null when the request should go to the device unchanged.
+    /// </summary>
+    private UrbResult? TryHandleLocally(UrbRequest request)
+    {
+        var requestType = request.Setup[0];
+        var code = request.Setup[1];
+        var value = (ushort)(request.Setup[2] | (request.Setup[3] << 8));
+        var index = (ushort)(request.Setup[4] | (request.Setup[5] << 8));
+
+        UrbResult Ok() => new() { UrbId = request.UrbId, Status = UrbStatus.Ok, ActualLength = 0 };
+
+        UrbResult Fail(string detail) =>
+            new() { UrbId = request.UrbId, Status = UrbStatus.Stalled, Detail = detail };
+
+        switch (requestType, code)
+        {
+            // SET_CONFIGURATION, addressed to the device. WinUSB configured the device when it
+            // was opened, so the only honest answers are success for the configuration it is
+            // already in, and a stall for any other.
+            case (0x00, 0x09):
+                return (byte)value == Info.ConfigurationValue || value == 0
+                    ? Ok()
+                    : Fail($"WinUSB keeps this device on configuration {Info.ConfigurationValue}.");
+
+            // SET_INTERFACE, addressed to an interface.
+            case (0x01, 0x0B):
+            {
+                if (!_interfaceHandles.TryGetValue((byte)index, out var handle))
+                    return Fail($"Interface {index} is not present on this device.");
+
+                return WinUsb_SetCurrentAlternateSetting(handle, (byte)value)
+                    ? Ok()
+                    : Fail($"WinUsb_SetCurrentAlternateSetting failed (Win32 {Marshal.GetLastWin32Error()}).");
+            }
+
+            // CLEAR_FEATURE(ENDPOINT_HALT), addressed to an endpoint.
+            case (0x02, 0x01) when value == 0x0000:
+            {
+                var endpoint = (byte)index;
+                if (!_pipeOwners.TryGetValue(endpoint, out var owner))
+                    return Fail($"Endpoint 0x{endpoint:x2} is not present on this device.");
+
+                return WinUsb_ResetPipe(owner, endpoint)
+                    ? Ok()
+                    : Fail($"WinUsb_ResetPipe failed (Win32 {Marshal.GetLastWin32Error()}).");
+            }
+
+            default:
+                return null;
         }
     }
 

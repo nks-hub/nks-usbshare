@@ -14,7 +14,7 @@ macOS, WPF for the Windows interface, and the .NET TLS stack for the transport.
 | Enumerate local USB devices | verified | implemented | verified |
 | Share a device (export) | verified | implemented | not implemented |
 | Use a remote device from an application | verified | verified | verified |
-| Present a remote device to the whole OS | needs a kernel driver | via in-kernel `vhci_hcd` | needs a kernel driver |
+| Present a remote device to the whole OS | verified, with a virtual controller installed | via in-kernel `vhci_hcd` | not possible today |
 | Native application window | WPF | planned (GTK) | planned (AppKit) |
 | Command line | verified | implemented | implemented |
 
@@ -38,6 +38,24 @@ nksusb probe 10.0.0.7 'USB\VID_FFFF&PID_5678\9207014AB5258217200'
     interface 0 alt 0  class 08/06/50
       endpoint 0x01  Bulk        512 bytes
       endpoint 0x82  Bulk        512 bytes
+```
+
+The import path was then checked the same way. With a virtual controller installed, `nksusb attach`
+handed the same flash drive to the virtual machine's own USB stack: Windows enumerated it, bound
+its ordinary mass storage driver, and mounted the filesystem as a removable drive. Files written
+from the virtual machine landed on the physical device, and a two megabyte round trip came back
+byte for byte identical.
+
+```
+Port 01: device in use at High Speed(480Mbps)
+         unknown vendor : unknown product (ffff:5678)
+           -> usbip://127.0.0.1:3240/1-1
+
+Number FriendlyName       BusType   GB   Status
+     2 Generic Flash Disk USB     14.9   Online
+
+DriveLetter FileSystemLabel FileSystem   GB
+          G 20250512-PL     FAT32      14.9
 ```
 
 ## How it fits together

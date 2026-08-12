@@ -174,10 +174,9 @@ public sealed class UsbIpEndpoint : IAsyncDisposable
 
     private async Task SendDeviceListAsync(Stream stream, CancellationToken cancellationToken)
     {
-        // The request carries a 4 byte status field that is not used for a listing.
-        var padding = new byte[4];
-        await ReadExactAsync(stream, padding, cancellationToken).ConfigureAwait(false);
-
+        // A listing request is the eight byte common header and nothing more; the status field
+        // is already part of it. Reading further here would block waiting for bytes that the
+        // controller never sends.
         Export[] exports;
         lock (_exportsLock) exports = _exports.ToArray();
 
@@ -203,10 +202,11 @@ public sealed class UsbIpEndpoint : IAsyncDisposable
 
     private async Task ImportAsync(Stream stream, CancellationToken cancellationToken)
     {
-        var rest = new byte[4 + 32];
+        // The common header has already been read; what follows is the 32 byte bus id.
+        var rest = new byte[32];
         if (!await ReadExactAsync(stream, rest, cancellationToken).ConfigureAwait(false)) return;
 
-        var busId = Encoding.ASCII.GetString(rest, 4, 32).TrimEnd('\0');
+        var busId = Encoding.ASCII.GetString(rest, 0, 32).TrimEnd('\0');
 
         Export? export;
         lock (_exportsLock) export = _exports.FirstOrDefault(e => e.BusId == busId);

@@ -29,7 +29,7 @@ public static class UsbIpTests
             await using var fixture = await Fixture.CreateAsync();
 
             using var controller = await fixture.ConnectAsync();
-            await controller.SendAsync(OperationRequest(RequestDeviceList, extra: 4));
+            await controller.SendAsync(OperationRequest(RequestDeviceList, extra: 0));
 
             var header = await controller.ReadAsync(8);
             Assert.Equal(ProtocolVersion, BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2)), "protocol version");
@@ -178,9 +178,9 @@ public static class UsbIpTests
 
     private static byte[] ImportRequest(string busId)
     {
-        var request = OperationRequest(RequestImport, extra: 4 + 32);
+        var request = OperationRequest(RequestImport, extra: 32);
         var bytes = Encoding.ASCII.GetBytes(busId);
-        bytes.CopyTo(request.AsSpan(12, Math.Min(bytes.Length, 32)));
+        bytes.CopyTo(request.AsSpan(8, Math.Min(bytes.Length, 32)));
         return request;
     }
 

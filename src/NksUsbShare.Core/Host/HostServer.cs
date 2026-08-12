@@ -37,6 +37,19 @@ public sealed class HostServer : IAsyncDisposable
     public int Port { get; private set; }
     public IReadOnlyCollection<HostSession> Sessions => _sessions.Keys.ToArray();
 
+    /// <summary>Drops every live session belonging to one client. Returns how many were dropped.</summary>
+    public async Task<int> DisconnectClientAsync(string fingerprint)
+    {
+        var matching = Sessions
+            .Where(s => s.ClientFingerprint is { } f && NodeIdentity.FingerprintsMatch(f, fingerprint))
+            .ToArray();
+
+        foreach (var session in matching)
+            await session.DisconnectAsync().ConfigureAwait(false);
+
+        return matching.Length;
+    }
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         if (_listener is not null) throw new InvalidOperationException("The host is already running.");

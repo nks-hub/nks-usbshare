@@ -84,6 +84,18 @@ public sealed class HostSession
         }
     }
 
+    /// <summary>
+    /// Drops the link straight away. The read loop unwinds and releases every device this client
+    /// was holding, which is what makes blocking a computer take effect at once rather than only
+    /// on its next connection.
+    /// </summary>
+    public async Task DisconnectAsync()
+    {
+        // The TLS stream has to go, not just the framing on top of it: the read loop is parked
+        // inside a read on that stream and only closing it underneath wakes it up.
+        await _stream.DisposeAsync().ConfigureAwait(false);
+    }
+
     private async Task<bool> HandshakeAsync(CancellationToken cancellationToken)
     {
         var frame = await _connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);

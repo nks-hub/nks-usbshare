@@ -237,6 +237,12 @@ public static class EndToEndTests
                 await Task.Delay(20);
 
             Assert.Equal(1, harness.Backend.DisposeCount, "the host cleaned up after the vanished client");
+
+            // Releasing the devices and forgetting the session are separate steps, so the second
+            // one needs its own wait rather than riding on the first.
+            for (var attempt = 0; attempt < 250 && harness.Host.Sessions.Count > 0; attempt++)
+                await Task.Delay(20);
+
             Assert.Equal(0, harness.Host.Sessions.Count, "the session was removed");
         });
 

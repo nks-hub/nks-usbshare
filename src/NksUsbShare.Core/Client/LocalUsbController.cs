@@ -24,7 +24,7 @@ public abstract class LocalUsbController
     public abstract Task<bool> DetachAsync(string busId, CancellationToken cancellationToken);
 
     /// <summary>Returns the controller present on this machine, or null when none is installed.</summary>
-    public static LocalUsbController? Locate()
+    public static LocalUsbController? Locate(Diagnostics.ActivityLog log)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
@@ -34,8 +34,13 @@ public abstract class LocalUsbController
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
+            // The kernel controller is driven directly through sysfs, so no userspace tool is
+            // needed. The tool is only a fallback for systems that expose it differently.
+            var kernel = LinuxVhciController.TryCreate(log);
+            if (kernel is not null) return kernel;
+
             var tool = LinuxPaths.FirstOrDefault(File.Exists);
-            return tool is null ? null : new CommandLineController("vhci_hcd", tool);
+            return tool is null ? null : new CommandLineController("usbip", tool);
         }
 
         // macOS has no way to create a virtual USB device outside the HID class, so there is

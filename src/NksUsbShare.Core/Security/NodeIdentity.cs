@@ -17,13 +17,11 @@ public sealed class NodeIdentity
     private static readonly string ExportPassphrase = "nks-usbshare";
 
     /// <summary>
-    /// SChannel refuses to use an ephemeral key as a TLS server credential, so on Windows the key
-    /// must go through a key container. Without PersistKeySet that container is removed again when
-    /// the certificate is disposed, so nothing is left behind.
+    /// Ephemeral keys are not usable here: Windows refuses them as a TLS server credential, and
+    /// macOS refuses to load them at all. Without PersistKeySet the key material is still cleaned
+    /// up when the certificate is disposed, so nothing is left behind.
     /// </summary>
-    private static X509KeyStorageFlags StorageFlags => OperatingSystem.IsWindows()
-        ? X509KeyStorageFlags.Exportable
-        : X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet;
+    private const X509KeyStorageFlags StorageFlags = X509KeyStorageFlags.Exportable;
 
     public X509Certificate2 Certificate { get; }
 

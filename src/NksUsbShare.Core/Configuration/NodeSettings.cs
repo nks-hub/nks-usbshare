@@ -12,6 +12,12 @@ public static class DefaultPorts
 
     /// <summary>Where the local web interface is served. Bound to loopback unless told otherwise.</summary>
     public const int WebUi = 57341;
+
+    /// <summary>
+    /// Where imported devices are offered to this machine's own virtual USB host controller.
+    /// Bound to loopback only; 3240 is the port such controllers look for by convention.
+    /// </summary>
+    public const int LocalController = 3240;
 }
 
 /// <summary>One device the host is willing to hand out.</summary>

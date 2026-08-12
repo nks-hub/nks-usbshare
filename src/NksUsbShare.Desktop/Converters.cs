@@ -45,7 +45,8 @@ public sealed class StateBrushConverter : IValueConverter
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
         => (value as string) switch
         {
-            "Shared" or "Connected" or "Imported" => Active,
+            "Shared" or "Connected" or "Attached" => Active,
+            "Imported" => Muted,
             "Unavailable" or "Blocked" => Problem,
             "Not shared" or "Disconnected" => Muted,
             _ => Normal,

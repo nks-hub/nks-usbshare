@@ -230,8 +230,14 @@ public sealed class NodeService : IAsyncDisposable
         return import;
     }
 
-    public void ReleaseImport(string importKey)
+    public void ReleaseImport(string importKey) => ReleaseImportAsync(importKey).GetAwaiter().GetResult();
+
+    public async Task ReleaseImportAsync(string importKey)
     {
+        // Take it away from the operating system first, so nothing is left holding a device
+        // whose transfers can no longer be answered.
+        await DetachFromSystemAsync(importKey, CancellationToken.None).ConfigureAwait(false);
+
         if (!_imports.TryRemove(importKey, out var import)) return;
 
         LocalController.Withdraw(import.Device);
@@ -250,6 +256,52 @@ public sealed class NodeService : IAsyncDisposable
             await LocalController.StartAsync(port, cancellationToken).ConfigureAwait(false);
 
         return LocalController.Publish(import.Device);
+    }
+
+    /// <summary>Bus ids handed to the local controller, by import key.</summary>
+    private readonly ConcurrentDictionary<string, string> _attached = new();
+
+    /// <summary>True when this import has been handed to the machine's own USB stack.</summary>
+    public bool IsAttachedToSystem(string importKey) => _attached.ContainsKey(importKey);
+
+    /// <summary>Whether this machine has a virtual USB host controller at all.</summary>
+    public bool SystemAttachAvailable => LocalUsbController.Locate(Log) is not null;
+
+    /// <summary>
+    /// Hands an imported device to this machine's virtual USB host controller, so every
+    /// application sees it rather than only this process.
+    /// </summary>
+    public async Task AttachToSystemAsync(ActiveImport import, CancellationToken cancellationToken)
+    {
+        var controller = LocalUsbController.Locate(Log)
+            ?? throw new InvalidOperationException(
+                "No virtual USB host controller is installed, so the device cannot be handed to the operating system.");
+
+        var busId = await PublishToLocalControllerAsync(import, DefaultPorts.LocalController, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!await controller.AttachAsync(LocalController.Port, busId, cancellationToken).ConfigureAwait(false))
+        {
+            LocalController.Withdraw(import.Device);
+            throw new InvalidOperationException($"The {controller.Name} controller refused to attach the device.");
+        }
+
+        _attached[import.Key] = busId;
+        Log.Info("attach", $"{import.Device.Info.DisplayName} is now attached to this machine.");
+        Changed();
+    }
+
+    public async Task DetachFromSystemAsync(string importKey, CancellationToken cancellationToken)
+    {
+        if (!_attached.TryRemove(importKey, out var busId)) return;
+
+        var controller = LocalUsbController.Locate(Log);
+        if (controller is not null) await controller.DetachAsync(busId, cancellationToken).ConfigureAwait(false);
+
+        if (_imports.TryGetValue(importKey, out var import)) LocalController.Withdraw(import.Device);
+
+        Log.Info("attach", "Detached from this machine.");
+        Changed();
     }
 
     public RemoteHost? FindRemote(string addressOrName)

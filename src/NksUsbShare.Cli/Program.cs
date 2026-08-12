@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using NksUsbShare.Core;
 using NksUsbShare.Core.Client;
 using NksUsbShare.Core.Configuration;
@@ -95,12 +96,7 @@ async Task<int> ServeAsync()
     var (node, log) = CreateNode(echo: true);
     await using var _ = node;
 
-    using var stopping = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, eventArgs) =>
-    {
-        eventArgs.Cancel = true;
-        stopping.Cancel();
-    };
+    using var stopping = CreateShutdownSignal();
 
     try
     {
@@ -116,7 +112,7 @@ async Task<int> ServeAsync()
     await node.AutoConnectAsync(stopping.Token);
     log.Info("app", "Running. Press Ctrl+C to stop.");
 
-    await WaitForShutdownAsync(stopping.Token);
+    await stopping.WaitAsync();
     return 0;
 }
 
@@ -353,17 +349,12 @@ async Task<int> ImportAsync()
     var remote = RequireRemote(node, options.Arguments[0]);
     if (remote is null) return 1;
 
-    using var stopping = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, eventArgs) =>
-    {
-        eventArgs.Cancel = true;
-        stopping.Cancel();
-    };
+    using var stopping = CreateShutdownSignal();
 
     var import = await node.ImportDeviceAsync(remote, options.Arguments[1], stopping.Token);
     log.Info("app", $"Holding {import.Device.Info.DisplayName}. Press Ctrl+C to release it.");
 
-    await WaitForShutdownAsync(stopping.Token);
+    await stopping.WaitAsync();
     node.ReleaseImport(import.Key);
     return 0;
 }
@@ -461,18 +452,13 @@ async Task<int> AttachAsync()
     var remote = RequireRemote(node, options.Arguments[0]);
     if (remote is null) return 1;
 
-    using var stopping = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, eventArgs) =>
-    {
-        eventArgs.Cancel = true;
-        stopping.Cancel();
-    };
+    using var stopping = CreateShutdownSignal();
 
     var import = await node.ImportDeviceAsync(remote, options.Arguments[1], stopping.Token);
     var port = options.Flags.Contains("port") ? 3240 : 3240;
     var busId = await node.PublishToLocalControllerAsync(import, port, stopping.Token);
 
-    var controller = LocalUsbController.Locate();
+    var controller = LocalUsbController.Locate(log);
     if (controller is null)
     {
         Console.WriteLine();
@@ -499,7 +485,7 @@ async Task<int> AttachAsync()
         Console.WriteLine();
     }
 
-    await WaitForShutdownAsync(stopping.Token);
+    await stopping.WaitAsync();
 
     if (controller is not null)
     {
@@ -532,17 +518,14 @@ RemoteHost? RequireRemote(NodeService node, string reference)
     return null;
 }
 
-static async Task WaitForShutdownAsync(CancellationToken cancellationToken)
-{
-    try
-    {
-        await Task.Delay(Timeout.Infinite, cancellationToken);
-    }
-    catch (OperationCanceledException)
-    {
-        Console.WriteLine();
-    }
-}
+/// <summary>
+/// A shutdown signal that works whether or not there is a terminal attached.
+/// Console.CancelKeyPress only fires for an interactive Ctrl+C, so a process started by a service
+/// manager or with nohup would otherwise never hear a stop request and would have to be killed,
+/// leaving devices attached behind it.
+/// </summary>
+static ShutdownSignal CreateShutdownSignal() => new();
+
 
 static string? ResolveDeviceId(string reference, IReadOnlyList<UsbDeviceInfo> devices)
 {
@@ -611,5 +594,59 @@ internal sealed record CommandLine(string Command, IReadOnlyList<string> Argumen
         if (flags.Contains("version")) command = "version";
 
         return new CommandLine(command.ToLowerInvariant(), positional.Skip(1).ToArray(), flags, home);
+    }
+}
+
+internal sealed class ShutdownSignal : IDisposable
+{
+    private readonly CancellationTokenSource _source = new();
+    private readonly List<PosixSignalRegistration> _registrations = [];
+
+    public ShutdownSignal()
+    {
+        Console.CancelKeyPress += OnCancelKeyPress;
+
+        foreach (var signal in (PosixSignal[])[PosixSignal.SIGINT, PosixSignal.SIGTERM, PosixSignal.SIGQUIT])
+        {
+            try
+            {
+                _registrations.Add(PosixSignalRegistration.Create(signal, context =>
+                {
+                    context.Cancel = true;
+                    _source.Cancel();
+                }));
+            }
+            catch (PlatformNotSupportedException)
+            {
+                // Not every signal exists on every platform; the others still cover shutdown.
+            }
+        }
+    }
+
+    public CancellationToken Token => _source.Token;
+
+    private void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs eventArgs)
+    {
+        eventArgs.Cancel = true;
+        _source.Cancel();
+    }
+
+    public async Task WaitAsync()
+    {
+        try
+        {
+            await Task.Delay(Timeout.Infinite, _source.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine();
+        }
+    }
+
+    public void Dispose()
+    {
+        Console.CancelKeyPress -= OnCancelKeyPress;
+        foreach (var registration in _registrations) registration.Dispose();
+        _source.Dispose();
     }
 }

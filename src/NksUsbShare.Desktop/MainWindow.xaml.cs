@@ -144,7 +144,7 @@ public partial class MainWindow : Window
             HostAddress = row.HostAddress,
             HostPort = row.HostPort,
             ImportKey = imported.GetValueOrDefault($"{row.HostAddress}:{row.HostPort}|{row.DeviceId}"),
-            Status = imported.ContainsKey($"{row.HostAddress}:{row.HostPort}|{row.DeviceId}") ? "Imported" : "Available",
+            Status = DescribeImportState(imported, $"{row.HostAddress}:{row.HostPort}|{row.DeviceId}"),
         }).ToList();
 
         var selected = (RemoteDeviceList.SelectedItem as RemoteDeviceRow)?.DeviceId;
@@ -154,6 +154,15 @@ public partial class MainWindow : Window
         if (selected is not null)
             RemoteDeviceList.SelectedItem = _remoteDevices.FirstOrDefault(d => d.DeviceId == selected);
     }
+
+    /// <summary>
+    /// "Attached" means the operating system itself has the device; "Imported" means only this
+    /// application can reach it, which is what happens without a virtual host controller.
+    /// </summary>
+    private string DescribeImportState(Dictionary<string, string> imported, string key)
+        => imported.ContainsKey(key)
+            ? _node.IsAttachedToSystem(key) ? "Attached" : "Imported"
+            : "Available";
 
     private void UpdateStatusBar()
     {
@@ -296,7 +305,7 @@ public partial class MainWindow : Window
                     HostAddress = host.Address,
                     HostPort = host.Port,
                     ImportKey = imported.Contains(key) ? key : null,
-                    Status = imported.Contains(key) ? "Imported" : "Available",
+                    Status = imported.Contains(key) ? (_node.IsAttachedToSystem(key) ? "Attached" : "Imported") : "Available",
                 });
             }
 
@@ -356,8 +365,22 @@ public partial class MainWindow : Window
             if (remote is null) return;
 
             var import = await _node.ImportDeviceAsync(remote, row.DeviceId, CancellationToken.None);
+
+            // Hand it to the operating system when this machine has a controller for that. When
+            // it does not, the device is still usable through the library, so say so rather than
+            // failing the whole operation.
+            if (_node.SystemAttachAvailable)
+            {
+                await _node.AttachToSystemAsync(import, CancellationToken.None);
+                Report($"{import.Device.Info.DisplayName} is attached and should appear as a local device.");
+            }
+            else
+            {
+                Report($"{import.Device.Info.DisplayName} is in use by this application. " +
+                       "Install a virtual USB host controller to let the whole system see it.");
+            }
+
             RefreshFromNode();
-            Report($"{import.Device.Info.DisplayName} is now in use on this computer.");
         });
     }
 
@@ -365,12 +388,11 @@ public partial class MainWindow : Window
     {
         if (RemoteDeviceList.SelectedItem is not RemoteDeviceRow { ImportKey: { } key } row) return;
 
-        await Guard(() =>
+        await Guard(async () =>
         {
-            _node.ReleaseImport(key);
+            await _node.ReleaseImportAsync(key);
             RefreshFromNode();
             Report($"{row.Name} released.");
-            return Task.CompletedTask;
         });
     }
 
@@ -485,7 +507,12 @@ public partial class MainWindow : Window
 /// <summary>Bare command wrapper so a keyboard shortcut can call a handler.</summary>
 internal sealed class RelayCommand(Action<object?> execute) : ICommand
 {
-    public event EventHandler? CanExecuteChanged;
+    public event EventHandler? CanExecuteChanged
+    {
+        add => CommandManager.RequerySuggested += value;
+        remove => CommandManager.RequerySuggested -= value;
+    }
+
     public bool CanExecute(object? parameter) => true;
     public void Execute(object? parameter) => execute(parameter);
 }

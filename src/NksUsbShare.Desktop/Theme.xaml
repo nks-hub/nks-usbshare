@@ -53,6 +53,9 @@
                 <Style TargetType="ListViewItem">
                     <Setter Property="Padding" Value="4,5" />
                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <!-- Every row type carries a Name; without this a screen reader announces the
+                         C# class name of the row object instead of the device or computer. -->
+                    <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
                 </Style>
             </Setter.Value>
         </Setter>

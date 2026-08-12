@@ -9,6 +9,7 @@ Console.WriteLine($"  os:      {System.Runtime.InteropServices.RuntimeInformatio
 ProtocolTests.Register();
 UsbTests.Register();
 SecurityTests.Register();
+EndToEndTests.Register();
 LiveHardwareTests.Register();
 
 var filter = args.FirstOrDefault(a => !a.StartsWith('-'));

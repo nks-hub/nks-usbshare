@@ -28,6 +28,9 @@ public sealed class HostSession
     public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UtcNow;
     public bool Authenticated { get; private set; }
 
+    /// <summary>Raised once the client has proved itself and is named, not merely connected.</summary>
+    public event Action? HandshakeCompleted;
+
     public IReadOnlyCollection<string> ImportedDeviceIds
         => _openDevices.Values.Select(d => d.Handle.Info.DeviceId).ToArray();
 
@@ -135,6 +138,7 @@ public sealed class HostSession
 
         Authenticated = true;
         _log.Info("host", $"{ClientName} ({hello.ClientPlatform}) connected from {RemoteEndPoint}.");
+        HandshakeCompleted?.Invoke();
 
         await _connection.SendAsync(MessageType.HelloAck,
             new HelloAckMessage(_settings.HostName, UsbBackend.DescribeCurrentPlatform(), _backend.Name,

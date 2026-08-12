@@ -37,6 +37,12 @@ public sealed class HostServer : IAsyncDisposable
     public int Port { get; private set; }
     public IReadOnlyCollection<HostSession> Sessions => _sessions.Keys.ToArray();
 
+    /// <summary>
+    /// Raised when a client finishes its handshake or its link ends, so a window can show the
+    /// computer arriving instead of waiting for someone to press Refresh.
+    /// </summary>
+    public event Action? SessionsChanged;
+
     /// <summary>Drops every live session belonging to one client. Returns how many were dropped.</summary>
     public async Task<int> DisconnectClientAsync(string fingerprint)
     {
@@ -115,6 +121,7 @@ public sealed class HostServer : IAsyncDisposable
 
             try
             {
+                session.HandshakeCompleted += () => SessionsChanged?.Invoke();
                 await session.RunAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
@@ -141,6 +148,7 @@ public sealed class HostServer : IAsyncDisposable
             {
                 _sessions.TryRemove(session, out _);
                 if (session.Authenticated) _log.Info("host", $"{session.ClientName} disconnected.");
+                SessionsChanged?.Invoke();
             }
             client.Dispose();
         }

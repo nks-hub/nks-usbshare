@@ -51,6 +51,7 @@ public sealed class NodeService : IAsyncDisposable
         Identity = NodeIdentity.LoadOrCreate(
             Path.GetDirectoryName(settings.SourcePath) ?? NodeSettings.DefaultStateDirectory, settings.HostName);
         Host = new HostServer(settings, Identity, Backend, log);
+        Host.SessionsChanged += Changed;
         LocalController = new UsbIpEndpoint(log);
     }
 

@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using NksUsbShare.Core;
 using NksUsbShare.Core.Configuration;
+using NksUsbShare.Core.Security;
 using NksUsbShare.Core.Usb;
 
 namespace NksUsbShare.Mcp;
@@ -141,6 +142,80 @@ public sealed class ToolRegistry
                 var deviceId = Require(arguments, "deviceId");
                 _node.UnshareDevice(deviceId);
                 return Done($"{deviceId} is no longer shared.");
+            }),
+
+        new("list_clients",
+            "Computers that have connected to this node, with whether each one is allowed in.",
+            Schema(),
+            (_, _) =>
+            {
+                if (_node.Settings.KnownClients.Count == 0)
+                    return Done("No computer has connected to this node yet.");
+
+                var live = _node.Host.Sessions.Select(s => s.ClientFingerprint).Where(f => f is not null).ToHashSet();
+                return Done(string.Join("\n", _node.Settings.KnownClients.Select(client =>
+                    $"{(client.Name.Length > 0 ? client.Name : "unnamed")}  {client.Fingerprint}  " +
+                    $"last seen {client.LastSeen.ToLocalTime():yyyy-MM-dd HH:mm}  " +
+                    $"{(client.Blocked ? "blocked" : live.Any(f => NodeIdentity.FingerprintsMatch(f!, client.Fingerprint)) ? "connected" : "allowed")}")));
+            }),
+
+        new("set_client_blocked",
+            "Refuse or re-admit a computer. A blocked computer is turned away even when it knows " +
+            "the pairing token, and any devices it holds are released.",
+            Schema(
+                ("fingerprint", "string", "Key fingerprint from list_clients.", true),
+                ("blocked", "boolean", "True to refuse the computer, false to let it back in.", true)),
+            async (arguments, _) =>
+            {
+                var fingerprint = Require(arguments, "fingerprint");
+                var blocked = arguments["blocked"]?.GetValue<bool>()
+                    ?? throw new ArgumentException("The 'blocked' argument is required.");
+
+                var client = _node.Settings.KnownClients
+                    .FirstOrDefault(c => NodeIdentity.FingerprintsMatch(c.Fingerprint, fingerprint))
+                    ?? throw new ArgumentException($"No computer has the fingerprint '{fingerprint}'.");
+
+                client.Blocked = blocked;
+                _node.Settings.Save();
+
+                if (!blocked) return $"{client.Name} may connect again.";
+
+                var dropped = await _node.Host.DisconnectClientAsync(client.Fingerprint);
+                return dropped > 0
+                    ? $"{client.Name} is blocked and was disconnected."
+                    : $"{client.Name} is blocked and will be refused.";
+            }),
+
+        new("set_device_access",
+            "Choose which computers may use a shared device. An empty list offers it to every " +
+            "computer that knows the pairing token.",
+            Schema(
+                ("deviceId", "string", "Device id from list_local_devices.", true),
+                ("fingerprints", "array", "Key fingerprints from list_clients. Empty or absent means anyone.", false)),
+            (arguments, _) =>
+            {
+                var deviceId = Require(arguments, "deviceId");
+                var share = _node.Settings.Shares.FirstOrDefault(s => s.DeviceId == deviceId)
+                    ?? throw new ArgumentException($"{deviceId} is not shared, so there is nothing to allow.");
+
+                var chosen = (arguments["fingerprints"] as JsonArray ?? [])
+                    .Select(node => node?.GetValue<string>())
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Select(value => value!)
+                    .ToList();
+
+                foreach (var fingerprint in chosen)
+                {
+                    if (!_node.Settings.KnownClients.Any(c => NodeIdentity.FingerprintsMatch(c.Fingerprint, fingerprint)))
+                        throw new ArgumentException($"No computer has the fingerprint '{fingerprint}'.");
+                }
+
+                share.AllowedClients = chosen;
+                _node.Settings.Save();
+
+                return Done(chosen.Count == 0
+                    ? $"'{share.Label}' is offered to any computer that knows the pairing token."
+                    : $"'{share.Label}' is offered only to {chosen.Count} chosen computer(s).");
             }),
 
         new("list_hosts",

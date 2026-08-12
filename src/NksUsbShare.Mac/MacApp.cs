@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using NksUsbShare.Core;
+using NksUsbShare.Core.Security;
 using NksUsbShare.Core.Usb;
 using static NksUsbShare.Mac.ObjC;
 
@@ -323,6 +324,50 @@ public sealed class MacApp
                         SetStatus(offered.Count == 0
                             ? $"{remote.Address} offers nothing to this Mac."
                             : $"{remote.Address} offers: {string.Join(", ", offered.Select(d => d.DisplayName))}");
+                    })));
+            }
+
+            Add(_root, table);
+        }
+
+        // --- computers allowed in ---
+        Add(_root, Section("Computers allowed in"));
+
+        if (_node.Settings.KnownClients.Count == 0)
+        {
+            Add(_root, Label("No computer has connected to this Mac yet.", dim: true));
+        }
+        else
+        {
+            var live = _node.Host.Sessions
+                .Select(s => s.ClientFingerprint)
+                .Where(f => f is not null)
+                .ToArray();
+
+            var table = Table("Computer", "Key fingerprint", "Last seen", "Status", "");
+
+            foreach (var client in _node.Settings.KnownClients)
+            {
+                var target = client;
+                var connected = live.Any(f => NodeIdentity.FingerprintsMatch(f!, target.Fingerprint));
+
+                Call(table, "addRowWithViews:", Array(
+                    Label(target.Name.Length > 0 ? target.Name : "unnamed"),
+                    Label(target.Fingerprint),
+                    Label(target.LastSeen.ToLocalTime().ToString("yyyy-MM-dd HH:mm"), dim: true),
+                    Label(target.Blocked ? "blocked" : connected ? "connected" : "allowed", dim: !target.Blocked && !connected),
+                    Button(target.Blocked ? "Unblock" : "Block", async () =>
+                    {
+                        target.Blocked = !target.Blocked;
+                        _node.Settings.Save();
+
+                        // Blocking should bite now, not whenever the computer happens to reconnect.
+                        if (target.Blocked) await _node.Host.DisconnectClientAsync(target.Fingerprint);
+
+                        SetStatus(target.Blocked
+                            ? $"{target.Name} is blocked and cannot come back."
+                            : $"{target.Name} may connect again.");
+                        Refresh();
                     })));
             }
 

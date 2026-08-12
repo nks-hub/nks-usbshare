@@ -12,6 +12,7 @@
             <MenuItem Header="_File">
                 <MenuItem Header="_Refresh" InputGestureText="F5" Click="OnRefresh" />
                 <Separator />
+                <MenuItem Header="_Settings…" Click="OnOpenSettings" />
                 <MenuItem Header="Open settings _folder" Click="OnOpenSettingsFolder" />
                 <Separator />
                 <MenuItem Header="E_xit" Click="OnExit" />
@@ -109,6 +110,7 @@
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
                         <Button x:Name="ShareButton" Content="Share device" Click="OnShareSelected" IsEnabled="False" />
                         <Button x:Name="UnshareButton" Content="Stop sharing" Click="OnUnshareSelected" IsEnabled="False" />
+                        <Button x:Name="AccessButton" Content="Who can use it…" Click="OnEditAccess" IsEnabled="False" />
                         <TextBlock Text="Double-click a device to share it or take it back."
                                    Foreground="#767676" VerticalAlignment="Center" Margin="8,0,0,0" />
                     </StackPanel>
@@ -210,18 +212,34 @@
             </TabItem>
 
             <!-- ============ Connected clients ============ -->
-            <TabItem Header="Connected clients">
-                <DockPanel Margin="8">
-                    <TextBlock DockPanel.Dock="Top" Text="Computers currently using devices from here"
-                               FontWeight="SemiBold" Margin="0,0,0,5" />
-                    <ListView x:Name="ClientList">
+            <TabItem Header="Computers">
+                <DockPanel Margin="16,14,16,14">
+                    <TextBlock DockPanel.Dock="Top" Text="Computers that have used devices from here"
+                               FontWeight="SemiBold" Margin="0,0,0,6" />
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
+                        <Button x:Name="BlockButton" Content="Block" Click="OnBlockClient" IsEnabled="False" />
+                        <Button x:Name="ForgetClientButton" Content="Forget" Click="OnForgetClient" IsEnabled="False" />
+                        <TextBlock Text="A blocked computer is refused even with the right pairing token."
+                                   Foreground="#767676" VerticalAlignment="Center" Margin="8,0,0,0" />
+                    </StackPanel>
+
+                    <ListView x:Name="ClientList" SelectionChanged="OnClientSelectionChanged">
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="Computer" Width="200" DisplayMemberBinding="{Binding Name}" />
-                                <GridViewColumn Header="Address" Width="170" DisplayMemberBinding="{Binding Address}" />
-                                <GridViewColumn Header="Platform" Width="200" DisplayMemberBinding="{Binding Platform}" />
-                                <GridViewColumn Header="Devices in use" Width="110" DisplayMemberBinding="{Binding DeviceCount}" />
-                                <GridViewColumn Header="Connected since" Width="140" DisplayMemberBinding="{Binding Since}" />
+                                <GridViewColumn Header="Computer" Width="170" DisplayMemberBinding="{Binding Name}" />
+                                <GridViewColumn Header="Key fingerprint" Width="200" DisplayMemberBinding="{Binding Fingerprint}" />
+                                <GridViewColumn Header="Address" Width="150" DisplayMemberBinding="{Binding Address}" />
+                                <GridViewColumn Header="Devices in use" Width="100" DisplayMemberBinding="{Binding DeviceCount}" />
+                                <GridViewColumn Header="Last seen" Width="130" DisplayMemberBinding="{Binding LastSeen}" />
+                                <GridViewColumn Header="Status" Width="100">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Status}"
+                                                       Foreground="{Binding Status, Converter={StaticResource StateBrush}}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                             </GridView>
                         </ListView.View>
                     </ListView>

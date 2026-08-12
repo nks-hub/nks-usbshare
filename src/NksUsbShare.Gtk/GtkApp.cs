@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using NksUsbShare.Core;
+using NksUsbShare.Core.Security;
 using NksUsbShare.Core.Usb;
 
 namespace NksUsbShare.Gtk;
@@ -231,6 +232,57 @@ public sealed class GtkApp
 
                 Gtk.WidgetSetValign(button, AlignCenter);
                 Gtk.GridAttach(table, button, 3, row, 1, 1);
+                row++;
+            }
+
+            Gtk.BoxPackStart(_content, table, expand: false, fill: false, 0);
+        }
+
+        Gtk.BoxPackStart(_content, SectionTitle("Computers allowed in"), expand: false, fill: false, 0);
+
+        if (_node.Settings.KnownClients.Count == 0)
+        {
+            Gtk.BoxPackStart(_content,
+                Label("No computer has connected to this one yet.", dim: true),
+                expand: false, fill: false, 0);
+        }
+        else
+        {
+            var live = _node.Host.Sessions
+                .Select(s => s.ClientFingerprint)
+                .Where(f => f is not null)
+                .ToArray();
+
+            var table = Table("Computer", "Key fingerprint", "Last seen", "Status", "");
+            var row = 1;
+
+            foreach (var client in _node.Settings.KnownClients)
+            {
+                var connected = live.Any(f => NodeIdentity.FingerprintsMatch(f!, client.Fingerprint));
+
+                Cell(table, 0, row, client.Name.Length > 0 ? client.Name : "unnamed", wide: true);
+                Cell(table, 1, row, client.Fingerprint);
+                Cell(table, 2, row, client.LastSeen.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
+                Cell(table, 3, row, client.Blocked ? "blocked" : connected ? "connected" : "allowed");
+
+                var target = client;
+                var button = MakeButton(target.Blocked ? "Unblock" : "Block", () =>
+                {
+                    target.Blocked = !target.Blocked;
+                    _node.Settings.Save();
+
+                    // Blocking should bite now, not whenever the computer happens to reconnect.
+                    if (target.Blocked)
+                        _node.Host.DisconnectClientAsync(target.Fingerprint).GetAwaiter().GetResult();
+
+                    SetStatus(target.Blocked
+                        ? $"{target.Name} is blocked and cannot come back."
+                        : $"{target.Name} may connect again.");
+                    Refresh();
+                });
+
+                Gtk.WidgetSetValign(button, AlignCenter);
+                Gtk.GridAttach(table, button, 4, row, 1, 1);
                 row++;
             }
 

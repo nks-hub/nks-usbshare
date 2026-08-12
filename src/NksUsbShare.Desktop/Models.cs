@@ -46,12 +46,14 @@ public sealed class RemoteDeviceRow
     public bool IsImported => ImportKey is not null;
 }
 
-/// <summary>A row in the connected clients list.</summary>
+/// <summary>A row in the computers list: everything this node has ever let in.</summary>
 public sealed class ClientRow
 {
     public required string Name { get; init; }
+    public required string Fingerprint { get; init; }
     public required string Address { get; init; }
-    public required string Platform { get; init; }
     public required string DeviceCount { get; init; }
-    public required string Since { get; init; }
+    public required string LastSeen { get; init; }
+    public required string Status { get; init; }
+    public bool Blocked { get; init; }
 }

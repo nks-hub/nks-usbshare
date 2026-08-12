@@ -25,7 +25,10 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        var settings = NodeSettings.LoadOrCreate();
+        // Skip element 0: on Windows that is the executable path, not an argument.
+        var settings = NodeSettings.LoadOrCreate(
+            NodeSettings.StateDirectoryFromArguments(Environment.GetCommandLineArgs()[1..]));
+
         var log = new ActivityLog();
         _node = new NodeService(settings, log);
 
@@ -110,18 +113,46 @@ public partial class MainWindow : Window
         if (selectedHost is not null)
             HostList.SelectedItem = _hosts.FirstOrDefault(h => h.Endpoint == selectedHost);
 
+        // Every computer this node has let in, whether or not it is connected right now, so one
+        // can be blocked or forgotten between visits.
+        var live = _node.Host.Sessions.Where(s => s.Authenticated).ToList();
+        var selectedClient = (ClientList.SelectedItem as ClientRow)?.Fingerprint;
+
         _clients.Clear();
-        foreach (var session in _node.Host.Sessions.Where(s => s.Authenticated))
+        foreach (var known in _node.Settings.KnownClients.OrderByDescending(c => c.LastSeen))
+        {
+            var session = live.FirstOrDefault(s =>
+                s.ClientFingerprint is not null && NodeIdentity.FingerprintsMatch(s.ClientFingerprint, known.Fingerprint));
+
+            _clients.Add(new ClientRow
+            {
+                Name = known.Name.Length > 0 ? known.Name : "unnamed",
+                Fingerprint = known.Fingerprint,
+                Address = session?.RemoteEndPoint?.ToString() ?? "",
+                DeviceCount = session is null ? "" : session.ImportedDeviceIds.Count.ToString(),
+                LastSeen = known.LastSeen.ToLocalTime().ToString("yyyy-MM-dd HH:mm"),
+                Status = known.Blocked ? "Blocked" : session is not null ? "Connected" : "Known",
+                Blocked = known.Blocked,
+            });
+        }
+
+        // A client that connected without presenting a key has no record to keep, so it is shown
+        // only while it is connected.
+        foreach (var session in live.Where(s => s.ClientFingerprint is null))
         {
             _clients.Add(new ClientRow
             {
                 Name = session.ClientName,
+                Fingerprint = "no key presented",
                 Address = session.RemoteEndPoint?.ToString() ?? "",
-                Platform = session.ClientPlatform,
                 DeviceCount = session.ImportedDeviceIds.Count.ToString(),
-                Since = session.ConnectedAt.ToLocalTime().ToString("HH:mm:ss"),
+                LastSeen = session.ConnectedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm"),
+                Status = "Connected",
             });
         }
+
+        if (selectedClient is not null)
+            ClientList.SelectedItem = _clients.FirstOrDefault(c => c.Fingerprint == selectedClient);
 
         UpdateImportedFlags();
         UpdateStatusBar();
@@ -206,6 +237,107 @@ public partial class MainWindow : Window
         ShareButton.IsEnabled = claimable;
         ShareButton.Content = row is { CanShare: false, IsShared: false } ? "Claim and share" : "Share device";
         UnshareButton.IsEnabled = row is { IsShared: true };
+        AccessButton.IsEnabled = row is { IsShared: true };
+    }
+
+    // ---- access control ----
+
+    /// <summary>Chooses which computers a shared device is offered to.</summary>
+    private async void OnEditAccess(object sender, RoutedEventArgs e)
+    {
+        if (LocalDeviceList.SelectedItem is not LocalDeviceRow row) return;
+
+        var share = _node.Settings.Shares.FirstOrDefault(s => s.DeviceId == row.DeviceId);
+        if (share is null) return;
+
+        var dialog = new AccessDialog(share, _node.Settings.KnownClients, row.Name) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+
+        _node.Settings.Save();
+        await ReloadLocalDevicesAsync();
+
+        Report(share.AllowedClients.Count == 0
+            ? $"{row.Name} is offered to any paired computer."
+            : $"{row.Name} is offered to {share.AllowedClients.Count} chosen computer(s).");
+    }
+
+    private void OnClientSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        var row = ClientList.SelectedItem as ClientRow;
+        var known = row is not null && row.Fingerprint != "no key presented";
+
+        BlockButton.IsEnabled = known;
+        BlockButton.Content = row is { Blocked: true } ? "Unblock" : "Block";
+        ForgetClientButton.IsEnabled = known;
+    }
+
+    private async void OnBlockClient(object sender, RoutedEventArgs e)
+    {
+        if (ClientList.SelectedItem is not ClientRow row) return;
+
+        var client = _node.Settings.KnownClients
+            .FirstOrDefault(c => NodeIdentity.FingerprintsMatch(c.Fingerprint, row.Fingerprint));
+        if (client is null) return;
+
+        client.Blocked = !client.Blocked;
+        _node.Settings.Save();
+
+        // Blocking should bite now, not whenever the computer happens to reconnect.
+        if (client.Blocked) await _node.Host.DisconnectClientAsync(client.Fingerprint);
+
+        _node.Log.Warning("host", client.Blocked
+            ? $"{client.Name} is blocked and will be refused."
+            : $"{client.Name} is allowed again.");
+
+        RefreshFromNode();
+        OnClientSelectionChanged(this, null!);
+        Report(client.Blocked
+            ? $"{row.Name} is blocked. It was disconnected and cannot come back."
+            : $"{row.Name} may connect again.");
+    }
+
+    private void OnForgetClient(object sender, RoutedEventArgs e)
+    {
+        if (ClientList.SelectedItem is not ClientRow row) return;
+
+        var confirmed = MessageBox.Show(this,
+            $"Forget {row.Name}?\n\n" +
+            "Its key is removed from this computer's record, and any device restricted to it " +
+            "will no longer let it in.",
+            "Forget computer", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+        if (confirmed != MessageBoxResult.OK) return;
+
+        _node.Settings.KnownClients.RemoveAll(c => NodeIdentity.FingerprintsMatch(c.Fingerprint, row.Fingerprint));
+
+        foreach (var share in _node.Settings.Shares)
+            share.AllowedClients.RemoveAll(a => NodeIdentity.FingerprintsMatch(a, row.Fingerprint));
+
+        _node.Settings.Save();
+        RefreshFromNode();
+        Report($"{row.Name} forgotten.");
+    }
+
+    /// <summary>Node name, listening address and port, and whether a client key is required.</summary>
+    private async void OnOpenSettings(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SettingsDialog(_node.Settings) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+
+        if (dialog.NeedsRestart && _node.Host.IsRunning)
+        {
+            await Guard(async () =>
+            {
+                await _node.StopHostAsync();
+                await _node.StartHostAsync(CancellationToken.None);
+                Report($"Now listening on {_node.Settings.LinkBindAddress}:{_node.Host.Port}.");
+            });
+        }
+        else
+        {
+            Report("Settings saved.");
+        }
+
+        RefreshFromNode();
     }
 
     private void OnLocalDoubleClick(object sender, MouseButtonEventArgs e)

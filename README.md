@@ -122,19 +122,28 @@ is shared — a flash drive disappears from Explorer, a keyboard stops typing. T
 a USB device means on every product that does this. `-Restore` removes the package and puts the
 original class driver back.
 
-**Using a remote device as though it were plugged in locally** needs a virtual USB host controller:
+**Using a remote device as though it were plugged in locally** needs a virtual USB host controller.
+Only kernel-mode code can create one, so this is the single piece the project does not provide
+itself. What it provides instead is everything around it: `nksusb attach` imports the device,
+publishes it on a plain USB/IP endpoint bound to **loopback only**, and lets the machine's own
+controller attach to that. The network hop is still carried by the encrypted link — the plaintext
+protocol never leaves the machine.
 
-- **Linux** already has one in the kernel, `vhci_hcd`. Nothing has to be written or signed.
-- **Windows** has no in-box virtual device, but it does ship the framework to build one:
+```
+nksusb attach 10.0.0.7 'USB\VID_FFFF&PID_5678\9207014AB5258217200'
+```
+
+Which controller answers depends on the platform:
+
+- **Linux** already has one in the kernel, `vhci_hcd`, driven through the `usbip` tool. Nothing
+  has to be written, installed or signed.
+- **Windows** has no in-box virtual device. It ships the framework to build one —
   [`UdeCx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/writing-a-ude-client-driver),
-  the USB Device Emulation class extension, present since Windows 10 1903. A KMDF client driver
-  registers an emulated host controller, supplies the descriptors, and completes URBs — the same
-  transfer forwarding this project already does for export, running in the opposite direction.
-  The driver has to be signed to load: [OSSign](https://ossign.org/) signs open-source drivers at
-  no cost through Microsoft Trusted Signing, and Microsoft Trusted Signing itself is roughly $10 a
-  month for closed projects. Either produces a driver that installs on stock Windows 11 with Secure
-  Boot left on. Test-signing works for development but forces Secure Boot off, so it is not a
-  distribution route.
+  the USB Device Emulation class extension — but a KMDF client driver still has to be written and
+  signed. Rather than duplicate that,`nksusb attach` works with the controller from
+  [usbip-win2](https://github.com/vadimgrn/usbip-win2), which is BSD-2-Clause licensed and ships
+  drivers signed by the *Microsoft Windows Hardware Compatibility Publisher*, so they install on
+  stock Windows 11 with Secure Boot left on. Install it and `nksusb attach` finds it on its own.
 - **macOS** cannot do this at all today. DriverKit deliberately drives real hardware only —
   `USBDriverKit` matches on the vendor and product id of a device that is physically present, and
   Apple applies the same policy elsewhere, explicitly refusing `AudioDriverKit` for virtual audio

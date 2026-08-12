@@ -66,19 +66,23 @@ public abstract class LocalUsbController
 
         public override async Task<bool> AttachAsync(int port, string busId, CancellationToken cancellationToken)
         {
+            // The port is a global option, so it has to precede the subcommand. --once stops the
+            // tool from retrying forever when the endpoint is not answering.
             var (exitCode, output) = await RunAsync(
-                ["attach", "--tcp-port", port.ToString(), "--remote", "127.0.0.1", "--busid", busId],
+                ["--tcp-port", port.ToString(), "attach", "--remote", "127.0.0.1", "--bus-id", busId, "--once"],
                 cancellationToken).ConfigureAwait(false);
 
             if (exitCode == 0) return true;
 
-            // The Linux tool spells the same options with single letters.
+            // The Linux tool spells the same thing with single letters and no --once.
             var (fallbackCode, fallbackOutput) = await RunAsync(
-                ["attach", "-r", "127.0.0.1", "-b", busId], cancellationToken).ConfigureAwait(false);
+                ["--tcp-port", port.ToString(), "attach", "-r", "127.0.0.1", "-b", busId],
+                cancellationToken).ConfigureAwait(false);
 
             if (fallbackCode == 0) return true;
 
-            Console.Error.WriteLine(output.Trim().Length > 0 ? output.Trim() : fallbackOutput.Trim());
+            var message = output.Trim().Length > 0 ? output.Trim() : fallbackOutput.Trim();
+            if (message.Length > 0) Console.Error.WriteLine(message);
             return false;
         }
 

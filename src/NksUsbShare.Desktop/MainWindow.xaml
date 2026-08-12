@@ -51,10 +51,30 @@
 
             <!-- ============ This computer ============ -->
             <TabItem Header="This computer">
-                <DockPanel Margin="8">
+                <DockPanel Margin="16,14,16,14">
 
-                    <GroupBox DockPanel.Dock="Bottom" Header="Connection details" Margin="0,8,0,0">
-                        <Grid>
+                    <!-- Identity and connection details stay at the top; the device list fills
+                         the rest, which is the part people actually look at. -->
+                    <StackPanel DockPanel.Dock="Top">
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" x:Name="NodeNameBox" Text="—"
+                                       FontSize="19" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1" x:Name="BackendBox" Text="" Margin="12,0,0,0"
+                                       Foreground="#6B6B6B" VerticalAlignment="Bottom" Padding="0,0,0,3" />
+
+                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                <Button Content="Refresh" Click="OnRefresh" />
+                                <Button x:Name="SharingToggle" Content="Stop sharing" Click="OnToggleSharing" Margin="0" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,0,0,14">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
@@ -64,32 +84,31 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Pairing token:" Style="{StaticResource FieldLabel}" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Pairing token" Style="{StaticResource FieldLabel}" />
                             <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TokenBox" Style="{StaticResource MonoField}"
-                                       FontWeight="Bold" Margin="0,0,16,4" />
+                                       FontWeight="Bold" Margin="0,0,24,5" />
 
-                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Listening on:" Style="{StaticResource FieldLabel}" />
-                            <TextBox   Grid.Row="0" Grid.Column="3" x:Name="EndpointBox" Style="{StaticResource MonoField}" Margin="0,0,0,4" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Listening on" Style="{StaticResource FieldLabel}" />
+                            <TextBox   Grid.Row="0" Grid.Column="3" x:Name="EndpointBox" Style="{StaticResource MonoField}" Margin="0,0,0,5" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Key fingerprint:" Style="{StaticResource FieldLabel}" />
-                            <TextBox   Grid.Row="1" Grid.Column="1" x:Name="FingerprintBox" Style="{StaticResource MonoField}" Margin="0,0,16,4" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Key fingerprint" Style="{StaticResource FieldLabel}" />
+                            <TextBox   Grid.Row="1" Grid.Column="1" x:Name="FingerprintBox" Style="{StaticResource MonoField}" Margin="0,0,24,0" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="2" Text="This computer:" Style="{StaticResource FieldLabel}" />
-                            <TextBox   Grid.Row="1" Grid.Column="3" x:Name="NodeNameBox" Style="{StaticResource MonoField}" Margin="0,0,0,4" />
-
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Reachable at:" Style="{StaticResource FieldLabel}" />
-                            <TextBox   Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="AddressesBox"
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Reachable at" Style="{StaticResource FieldLabel}" />
+                            <TextBox   Grid.Row="1" Grid.Column="3" x:Name="AddressesBox"
                                        Style="{StaticResource MonoField}" TextWrapping="Wrap" />
                         </Grid>
-                    </GroupBox>
 
-                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock Text="USB devices on this computer" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    </StackPanel>
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
                         <Button x:Name="ShareButton" Content="Share device" Click="OnShareSelected" IsEnabled="False" />
                         <Button x:Name="UnshareButton" Content="Stop sharing" Click="OnUnshareSelected" IsEnabled="False" />
-                        <Button Content="Refresh" Click="OnRefresh" />
+                        <TextBlock Text="Double-click a device to share it or take it back."
+                                   Foreground="#767676" VerticalAlignment="Center" Margin="8,0,0,0" />
                     </StackPanel>
 
                     <ListView x:Name="LocalDeviceList" SelectionChanged="OnLocalSelectionChanged"

@@ -177,11 +177,13 @@ public partial class MainWindow : Window
 
         StartSharingItem.IsEnabled = !running;
         StopSharingItem.IsEnabled = running;
+        SharingToggle.Content = running ? "Stop sharing" : "Start sharing";
 
         TokenBox.Text = _node.Settings.PairingToken;
         FingerprintBox.Text = _node.Identity.Fingerprint;
         NodeNameBox.Text = _node.Settings.HostName;
-        EndpointBox.Text = $"{_node.Settings.LinkBindAddress}:{_node.Settings.LinkPort}";
+        BackendBox.Text = _node.Backend.Name;
+        EndpointBox.Text = $"{_node.Settings.LinkBindAddress}:{_node.Settings.LinkPort}" + (running ? "" : "   (stopped)");
         AddressesBox.Text = string.Join("   ", UsbDisplay.LocalAddresses().DefaultIfEmpty("no network interface"));
     }
 
@@ -397,6 +399,14 @@ public partial class MainWindow : Window
     }
 
     // ---- menu ----
+
+    /// <summary>The header button, which does whichever of start or stop makes sense right now.</summary>
+    private async void OnToggleSharing(object sender, RoutedEventArgs e)
+    {
+        if (_node.Host.IsRunning) OnStopSharing(sender, e);
+        else OnStartSharing(sender, e);
+        await Task.CompletedTask;
+    }
 
     private async void OnStartSharing(object sender, RoutedEventArgs e)
         => await Guard(async () =>

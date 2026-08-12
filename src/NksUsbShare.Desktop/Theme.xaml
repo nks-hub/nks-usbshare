@@ -46,7 +46,24 @@
     <Style TargetType="ListView">
         <Setter Property="FontFamily" Value="{StaticResource Ui}" />
         <Setter Property="FontSize" Value="12" />
-        <Setter Property="BorderBrush" Value="#D0D0D0" />
+        <Setter Property="BorderBrush" Value="#D8D8D8" />
+        <Setter Property="ItemContainerStyle">
+            <Setter.Value>
+                <!-- Default rows are cramped; a little breathing room makes a long list readable. -->
+                <Style TargetType="ListViewItem">
+                    <Setter Property="Padding" Value="4,5" />
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                </Style>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="GridViewColumnHeader">
+        <Setter Property="FontFamily" Value="{StaticResource Ui}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Padding" Value="6,5" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
     </Style>
 
     <Style TargetType="GroupBox">

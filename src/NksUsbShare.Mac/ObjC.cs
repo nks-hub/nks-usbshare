@@ -112,6 +112,12 @@ public static partial class ObjC
     public static partial IntPtr SendRect(IntPtr receiver, IntPtr selector, CGRect frame);
 
     [LibraryImport(Runtime, EntryPoint = "objc_msgSend")]
+    public static partial IntPtr SendTwoLongs(IntPtr receiver, IntPtr selector, long a, long b);
+
+    [LibraryImport(Runtime, EntryPoint = "objc_msgSend")]
+    public static partial IntPtr SendLongThenPointer(IntPtr receiver, IntPtr selector, long a, IntPtr b);
+
+    [LibraryImport(Runtime, EntryPoint = "objc_msgSend")]
     public static partial IntPtr SendWindowInit(
         IntPtr receiver, IntPtr selector, CGRect frame, ulong style, ulong backing,
         [MarshalAs(UnmanagedType.U1)] bool defer);
@@ -172,4 +178,12 @@ public static partial class ObjC
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsNull(IntPtr pointer) => pointer == IntPtr.Zero;
+
+    /// <summary>Builds an NSArray from a set of objects, which several AppKit calls expect.</summary>
+    public static IntPtr Array(params IntPtr[] items)
+    {
+        var array = New("NSMutableArray");
+        foreach (var item in items) Call(array, "addObject:", item);
+        return array;
+    }
 }

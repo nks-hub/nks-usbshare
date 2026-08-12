@@ -9,6 +9,9 @@ namespace NksUsbShare.Mac;
 /// A native AppKit window, built directly on the Objective-C runtime. No binding library is
 /// involved, which keeps the project free of dependencies at the cost of writing the message
 /// sends by hand.
+///
+/// Device lists are laid out with NSGridView so their columns line up, and the identity block
+/// stays at the top rather than scrolling away with them.
 /// </summary>
 public sealed class MacApp
 {
@@ -17,6 +20,7 @@ public sealed class MacApp
     private const long ActivationPolicyRegular = 0;
     private const long OrientationVertical = 1;
     private const long OrientationHorizontal = 0;
+    private const long AlignLeading = 5;
 
     private readonly NodeService _node;
     private IntPtr _application;
@@ -78,7 +82,7 @@ public sealed class MacApp
     private void BuildWindow()
     {
         var style = StyleTitled | StyleClosable | StyleMiniaturizable | StyleResizable;
-        var frame = new CGRect(0, 0, 780, 560);
+        var frame = new CGRect(0, 0, 880, 620);
 
         _window = SendWindowInit(
             Send(Class("NSWindow"), Sel("alloc")),
@@ -93,9 +97,9 @@ public sealed class MacApp
         // old autoresizing path size it keeps the layout simple and predictable.
         var content = Call(_window, "contentView");
 
-        _root = VerticalStack(8);
+        _root = VerticalStack(10);
         CallBool(_root, "setTranslatesAutoresizingMaskIntoConstraints:", true);
-        SendRect(_root, Sel("setFrame:"), new CGRect(16, 16, frame.Size.Width - 32, frame.Size.Height - 32));
+        SendRect(_root, Sel("setFrame:"), new CGRect(20, 20, frame.Size.Width - 40, frame.Size.Height - 40));
 
         // NSViewWidthSizable | NSViewHeightSizable
         CallLong(_root, "setAutoresizingMask:", 2 | 16);
@@ -109,8 +113,7 @@ public sealed class MacApp
         var stack = New("NSStackView");
         CallLong(stack, "setOrientation:", OrientationVertical);
         CallDouble(stack, "setSpacing:", spacing);
-        // NSLayoutAttributeLeading keeps rows flush to the left edge.
-        CallLong(stack, "setAlignment:", 5);
+        CallLong(stack, "setAlignment:", AlignLeading);
         return stack;
     }
 
@@ -122,13 +125,22 @@ public sealed class MacApp
         return stack;
     }
 
-    private static IntPtr Label(string text, bool bold = false, double size = 13)
+    private static IntPtr Label(string text, bool bold = false, double size = 13, bool dim = false)
     {
         var label = Call(Class("NSTextField"), "labelWithString:", Str(text));
         var font = bold
             ? SendDouble(Class("NSFont"), Sel("boldSystemFontOfSize:"), size)
             : SendDouble(Class("NSFont"), Sel("systemFontOfSize:"), size);
         CallVoid(label, "setFont:", font);
+
+        if (dim) CallVoid(label, "setTextColor:", Call(Class("NSColor"), "secondaryLabelColor"));
+        return label;
+    }
+
+    private static IntPtr Selectable(string text)
+    {
+        var label = Label(text);
+        CallBool(label, "setSelectable:", true);
         return label;
     }
 
@@ -142,6 +154,21 @@ public sealed class MacApp
 
         CallLong(button, "setTag:", tag);
         return button;
+    }
+
+    /// <summary>A grid whose first row is a dimmed heading, so columns stay aligned.</summary>
+    private static IntPtr Table(params string[] headings)
+    {
+        var grid = SendTwoLongs(Class("NSGridView"), Sel("gridViewWithNumberOfColumns:rows:"), 0, 0);
+        CallDouble(grid, "setColumnSpacing:", 18);
+        CallDouble(grid, "setRowSpacing:", 8);
+
+        var cells = headings
+            .Select(h => h.Length == 0 ? Label("") : Label(h, bold: true, size: 11, dim: true))
+            .ToArray();
+
+        Call(grid, "addRowWithViews:", Array(cells));
+        return grid;
     }
 
     /// <summary>
@@ -168,8 +195,8 @@ public sealed class MacApp
         var tag = SendForLong(sender, Sel("tag"));
         if (!Actions.TryGetValue(tag, out var action)) return;
 
-        // The click arrives on the main thread; the work is awaited there so AppKit stays
-        // consistent, which is acceptable for operations that take milliseconds.
+        // The click arrives on the main thread and the work is done there, which keeps AppKit
+        // consistent and is acceptable for operations that take milliseconds.
         try
         {
             action().GetAwaiter().GetResult();
@@ -193,95 +220,123 @@ public sealed class MacApp
         // Rebuilding the whole tree is cheap at this size and avoids tracking view identity.
         foreach (var view in Children(_root)) CallVoid(view, "removeFromSuperview");
 
-        Add(_root, Label($"{_node.Settings.HostName}  ·  {_node.Backend.Name}", bold: true, size: 16));
-        Add(_root, Label($"Pairing token   {_node.Settings.PairingToken}"));
-        Add(_root, Label($"Key fingerprint {_node.Identity.Fingerprint}"));
-        Add(_root, Label($"Listening on    {_node.Settings.LinkBindAddress}:{_node.Settings.LinkPort}" +
-                         (_node.Host.IsRunning ? "" : "  (stopped)")));
-        Add(_root, Label($"Reachable at    {string.Join("   ", UsbDisplay.LocalAddresses())}"));
+        // --- header ---
+        var titleRow = HorizontalStack(12);
+        Add(titleRow, Label(_node.Settings.HostName, bold: true, size: 17));
+        Add(titleRow, Label(_node.Backend.Name, dim: true));
+        Add(titleRow, Button("Refresh", () => { Refresh(); SetStatus("Refreshed."); return Task.CompletedTask; }));
+        Add(titleRow, Button(_node.Host.IsRunning ? "Stop sharing" : "Start sharing", async () =>
+        {
+            if (_node.Host.IsRunning)
+            {
+                await _node.StopHostAsync();
+                SetStatus("Stopped. Other computers can no longer reach this one.");
+            }
+            else
+            {
+                await _node.StartHostAsync(CancellationToken.None);
+                SetStatus($"Listening on {_node.Settings.LinkBindAddress}:{_node.Host.Port}.");
+            }
+            Refresh();
+        }));
+        Add(_root, titleRow);
 
-        Add(_root, Label(""));
-        Add(_root, Label("USB devices on this Mac", bold: true));
+        var details = SendTwoLongs(Class("NSGridView"), Sel("gridViewWithNumberOfColumns:rows:"), 0, 0);
+        CallDouble(details, "setColumnSpacing:", 14);
+        CallDouble(details, "setRowSpacing:", 3);
+
+        Detail(details, "Pairing token", _node.Settings.PairingToken);
+        Detail(details, "Key fingerprint", _node.Identity.Fingerprint);
+        Detail(details, "Listening on", $"{_node.Settings.LinkBindAddress}:{_node.Settings.LinkPort}" +
+                                        (_node.Host.IsRunning ? "" : "   (stopped)"));
+        Detail(details, "Reachable at", string.Join("   ", UsbDisplay.LocalAddresses()));
+        Add(_root, details);
+
+        // --- local devices ---
+        Add(_root, Section("USB devices on this Mac"));
 
         if (devices.Count == 0)
         {
-            Add(_root, Label("   Nothing is plugged in."));
+            Add(_root, Label("Nothing is plugged in.", dim: true));
         }
         else
         {
+            var table = Table("Device", "ID", "Type", "Speed", "");
+
             foreach (var (device, share) in devices)
             {
-                var row = HorizontalStack(12);
                 var shared = share is { Enabled: true };
+                var id = device.DeviceId;
+                var name = device.DisplayName;
 
-                Add(row, Label($"{device.HardwareKey}   {Pad(device.DisplayName, 30)} " +
-                               $"{Pad(UsbDisplay.Kind(device), 14)} {UsbDisplay.Speed(device.Speed)}"));
-
-                if (device.ShareBlockedReason is { } reason)
-                {
-                    Add(row, Label(reason));
-                }
-                else
-                {
-                    var id = device.DeviceId;
-                    Add(row, Button(shared ? "Stop sharing" : "Share", async () =>
+                var action = device.ShareBlockedReason is { } reason
+                    ? Label("unavailable", dim: true)
+                    : Button(shared ? "Stop sharing" : "Share", async () =>
                     {
-                        if (shared) _node.UnshareDevice(id);
-                        else await _node.ShareDeviceAsync(id, CancellationToken.None);
+                        if (shared)
+                        {
+                            _node.UnshareDevice(id);
+                            SetStatus($"{name} is no longer shared.");
+                        }
+                        else
+                        {
+                            await _node.ShareDeviceAsync(id, CancellationToken.None);
+                            SetStatus($"{name} is now offered to paired computers.");
+                        }
                         Refresh();
-                        SetStatus(shared ? "Stopped sharing." : "Shared.");
-                    }));
-                }
+                    });
 
-                Add(_root, row);
+                if (device.ShareBlockedReason is { } tooltip) CallVoid(action, "setToolTip:", Str(tooltip));
+
+                Call(table, "addRowWithViews:", Array(
+                    Label(name), Label(device.HardwareKey), Label(UsbDisplay.Kind(device)),
+                    Label(UsbDisplay.Speed(device.Speed)), action));
             }
+
+            Add(_root, table);
         }
 
-        Add(_root, Label(""));
-        Add(_root, Label("Other computers", bold: true));
+        // --- remote hosts ---
+        Add(_root, Section("Other computers"));
 
         if (_node.Settings.RemoteHosts.Count == 0)
         {
-            Add(_root, Label("   None paired yet. Use the command line to pair: nksusb pair <host> <token>"));
+            Add(_root, Label("None paired yet. Pair from a terminal with:  nksusb pair <host> <token>", dim: true));
         }
         else
         {
             var connected = _node.ConnectedHosts.ToHashSet();
+            var table = Table("Computer", "Address", "Status", "");
+
             foreach (var host in _node.Settings.RemoteHosts)
             {
-                var row = HorizontalStack(12);
                 var live = connected.Contains($"{host.Address}:{host.Port}");
-                Add(row, Label($"{Pad(host.Name.Length > 0 ? host.Name : host.Address, 24)} " +
-                               $"{Pad($"{host.Address}:{host.Port}", 24)} {(live ? "connected" : "not connected")}"));
-
                 var remote = host;
-                Add(row, Button("Show devices", async () =>
-                {
-                    var offered = await _node.ListRemoteDevicesAsync(remote, CancellationToken.None);
-                    SetStatus(offered.Count == 0
-                        ? $"{remote.Address} offers nothing to this Mac."
-                        : $"{remote.Address} offers: {string.Join(", ", offered.Select(d => d.DisplayName))}");
-                }));
 
-                Add(_root, row);
+                Call(table, "addRowWithViews:", Array(
+                    Label(host.Name.Length > 0 ? host.Name : host.Address),
+                    Label($"{host.Address}:{host.Port}"),
+                    Label(live ? "connected" : "not connected", dim: !live),
+                    Button("Show devices", async () =>
+                    {
+                        var offered = await _node.ListRemoteDevicesAsync(remote, CancellationToken.None);
+                        SetStatus(offered.Count == 0
+                            ? $"{remote.Address} offers nothing to this Mac."
+                            : $"{remote.Address} offers: {string.Join(", ", offered.Select(d => d.DisplayName))}");
+                    })));
             }
+
+            Add(_root, table);
         }
 
-        Add(_root, Label(""));
-
-        var controls = HorizontalStack(10);
-        Add(controls, Button("Refresh", async () => { Refresh(); SetStatus("Refreshed."); }));
-        Add(controls, Button(_node.Host.IsRunning ? "Stop sharing" : "Start sharing", async () =>
-        {
-            if (_node.Host.IsRunning) await _node.StopHostAsync();
-            else await _node.StartHostAsync(CancellationToken.None);
-            Refresh();
-        }));
-        Add(_root, controls);
-
-        _statusLabel = Label("Ready.");
+        _statusLabel = Label("Ready.", dim: true);
         Add(_root, _statusLabel);
     }
+
+    private static void Detail(IntPtr grid, string name, string value)
+        => Call(grid, "addRowWithViews:", Array(Label(name, dim: true), Selectable(value)));
+
+    private static IntPtr Section(string text) => Label(text, bold: true, size: 13);
 
     private void SetStatus(string text)
     {
@@ -299,7 +354,4 @@ public sealed class MacApp
             result.Add(SendLong(subviews, Sel("objectAtIndex:"), i));
         return result;
     }
-
-    private static string Pad(string value, int width)
-        => value.Length >= width ? value[..width] : value.PadRight(width);
 }

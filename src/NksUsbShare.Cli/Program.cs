@@ -27,6 +27,7 @@ try
         "import" => await ImportAsync(),
         "probe" => await ProbeAsync(),
         "attach" => await AttachAsync(),
+        "storage" => await StorageAsync(),
         "giveback" => await GiveBackAsync(),
         _ => Unknown(options.Command),
     };
@@ -73,6 +74,8 @@ int Help()
           probe <host[:port]> <id>   read descriptors straight off a remote device
           attach <host[:port]> <id>  hand a remote device to this machine's USB stack, so every
                                      application sees it as though it were plugged in here
+          storage <host[:port]> <id> read a remote storage device directly, without handing it to
+                                     the operating system — the only way on macOS
 
         Devices can be named by the index shown in `list`, so `nksusb share 3` works.
         The desktop application hosts the same node with a window; run one or the other,
@@ -225,6 +228,94 @@ async Task<int> SetShareAsync(bool share)
     }
 
     return 0;
+}
+
+/// <summary>
+/// Reads a remote storage device over SCSI without involving the local operating system. On a
+/// platform that cannot be given a virtual USB device at all, this is what "using" the device means.
+/// </summary>
+async Task<int> StorageAsync()
+{
+    if (options.Arguments.Count < 2)
+    {
+        Console.Error.WriteLine("error: storage needs a host and a device id.");
+        return 1;
+    }
+
+    var (node, _) = CreateNode(echo: false);
+    await using var _ = node;
+
+    var remote = RequireRemote(node, options.Arguments[0]);
+    if (remote is null) return 1;
+
+    using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+    var import = await node.ImportDeviceAsync(remote, options.Arguments[1], timeout.Token);
+
+    try
+    {
+        var storage = NksUsbShare.Core.Storage.MassStorageClient.Attach(import.Device);
+        await storage.ClaimAsync(timeout.Token);
+
+        Console.WriteLine();
+        Console.WriteLine($"  {import.Device.Info.DisplayName}  ({import.Device.Info.HardwareKey})");
+        Console.WriteLine($"  host {import.HostName} at {import.HostAddress}");
+        Console.WriteLine();
+
+        var identity = await storage.InquiryAsync(timeout.Token);
+        Console.WriteLine($"  SCSI inquiry     {identity.Vendor} {identity.Product} rev {identity.Revision}");
+
+        var capacity = await storage.ReadCapacityAsync(timeout.Token);
+        Console.WriteLine($"  capacity         {capacity.BlockCount:N0} blocks of {capacity.BlockSize} bytes " +
+                          $"({capacity.TotalBytes / 1024.0 / 1024 / 1024:F2} GB)");
+
+        var sector = await storage.ReadBlocksAsync(0, 1, capacity.BlockSize, timeout.Token);
+        Console.WriteLine($"  first sector     {sector.Length} bytes, " +
+                          $"boot signature {(sector.Length >= 512 && sector[510] == 0x55 && sector[511] == 0xAA ? "present" : "absent")}");
+        Console.WriteLine($"    {Convert.ToHexString(sector.AsSpan(0, Math.Min(32, sector.Length)))}…");
+
+        var partitions = NksUsbShare.Core.Storage.MassStorageClient.ReadPartitions(sector);
+        foreach (var (type, firstBlock, blockCount) in partitions)
+            Console.WriteLine($"  partition        type 0x{type:x2}, {blockCount:N0} blocks from {firstBlock:N0}");
+
+        // On a partitioned medium the volume starts at the partition, not at block zero.
+        var volumeStart = partitions.Count > 0 ? partitions[0].FirstBlock : 0;
+        var bootSector = volumeStart == 0 ? sector : await storage.ReadBlocksAsync(volumeStart, 1, capacity.BlockSize, timeout.Token);
+
+        var layout = NksUsbShare.Core.Storage.FatDirectory.ReadLayout(bootSector, volumeStart);
+        if (layout is null)
+        {
+            Console.WriteLine();
+            Console.WriteLine("  Read straight off the remote medium over the encrypted link.");
+            Console.WriteLine("  The volume is not FAT, so its contents are not listed here.");
+            Console.WriteLine();
+            return 0;
+        }
+
+        // One cluster of the root directory is plenty for a listing.
+        var clusterSectors = (ushort)Math.Min(layout.SectorsPerCluster, 64);
+        var root = await storage.ReadBlocksAsync(layout.RootDirectorySector, clusterSectors, capacity.BlockSize, timeout.Token);
+
+        var label = NksUsbShare.Core.Storage.FatDirectory.FindVolumeLabel(root);
+        if (label is not null) Console.WriteLine($"  volume label     {label}");
+
+        var entries = NksUsbShare.Core.Storage.FatDirectory.Parse(root);
+        Console.WriteLine();
+        Console.WriteLine($"  root directory   {entries.Count} entr{(entries.Count == 1 ? "y" : "ies")}");
+
+        foreach (var entry in entries)
+            Console.WriteLine($"    {(entry.IsDirectory ? "<dir> " : "      ")}{entry.Name,-34} " +
+                              $"{(entry.IsDirectory ? "" : $"{entry.Size,12:N0}")}  " +
+                              $"{entry.Modified?.ToString("yyyy-MM-dd HH:mm") ?? ""}");
+
+        Console.WriteLine();
+        Console.WriteLine("  Read straight off the remote medium over the encrypted link.");
+        Console.WriteLine();
+        return 0;
+    }
+    finally
+    {
+        await node.ReleaseImportAsync(import.Key);
+    }
 }
 
 async Task<int> GiveBackAsync()

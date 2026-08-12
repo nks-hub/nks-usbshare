@@ -73,7 +73,7 @@ public sealed class LinuxVhciController : LocalUsbController
 
             // "port sockfd devid speed", exactly as the kernel's attach_store expects it.
             var line = $"{free.Value} {(int)socket.Handle} {imported.DevId} {imported.Speed}";
-            await File.WriteAllTextAsync(Path.Combine(_root, "attach"), line, cancellationToken).ConfigureAwait(false);
+            await WriteSysfsAsync(Path.Combine(_root, "attach"), line, cancellationToken).ConfigureAwait(false);
 
             _ports[busId] = free.Value;
             _log.Info("vhci", $"Attached {busId} to kernel controller port {free.Value}.");
@@ -96,20 +96,67 @@ public sealed class LinuxVhciController : LocalUsbController
     public override async Task<bool> DetachAsync(string busId, CancellationToken cancellationToken)
     {
         if (!_ports.TryGetValue(busId, out var port)) return false;
+        _ports.Remove(busId);
+
+        // Closing the socket is itself a detach as far as the kernel is concerned, so by the time
+        // this runs the port is often already free. Writing to detach then fails with EINVAL,
+        // which would look like a problem when the device is in fact gone.
+        if (IsPortFree(port))
+        {
+            _log.Debug("vhci", $"Kernel controller port {port} was already released.");
+            return true;
+        }
 
         try
         {
-            await File.WriteAllTextAsync(Path.Combine(_root, "detach"), port.ToString(), cancellationToken)
+            await WriteSysfsAsync(Path.Combine(_root, "detach"), port.ToString(), cancellationToken)
                 .ConfigureAwait(false);
-            _ports.Remove(busId);
             _log.Info("vhci", $"Detached kernel controller port {port}.");
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // Check once more: the kernel may have released it between the test and the write.
+            if (IsPortFree(port)) return true;
+
             _log.Warning("vhci", $"Detaching port {port} failed: {ex.Message}");
             return false;
         }
+    }
+
+    private bool IsPortFree(int port) => FindPortStatus(port) is null or 4;
+
+    /// <summary>
+    /// Writes to a sysfs attribute. These files must be opened without truncation or creation,
+    /// which File.WriteAllText does not do, and the write has to land in a single call because
+    /// the kernel parses each write as a whole command.
+    /// </summary>
+    private static async Task WriteSysfsAsync(string path, string value, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(value), cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Current status of one controller port, or null when the port is not listed.</summary>
+    private int? FindPortStatus(int port)
+    {
+        foreach (var file in Directory.EnumerateFiles(_root, "status*"))
+        {
+            string text;
+            try { text = File.ReadAllText(file); }
+            catch (IOException) { continue; }
+
+            foreach (var line in text.Split('\n').Skip(1))
+            {
+                var columns = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (columns.Length < 3) continue;
+                if (!int.TryParse(columns[1], out var listed) || listed != port) continue;
+                if (int.TryParse(columns[2], out var status)) return status;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

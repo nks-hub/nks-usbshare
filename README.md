@@ -11,12 +11,12 @@ macOS, WPF for the Windows interface, and the .NET TLS stack for the transport.
 
 | | Windows | Linux | macOS |
 |---|---|---|---|
-| Enumerate local USB devices | verified | implemented | verified |
-| Share a device (export) | verified | implemented | not implemented |
+| Enumerate local USB devices | verified | verified | verified |
+| Share a device (export) | verified | verified | implemented |
 | Use a remote device from an application | verified | verified | verified |
-| Present a remote device to the whole OS | verified, with a virtual controller installed | via in-kernel `vhci_hcd` | not possible today |
-| Native application window | WPF | planned (GTK) | planned (AppKit) |
-| Command line | verified | implemented | implemented |
+| Present a remote device to the whole OS | verified | verified | not possible today |
+| Native application window | WPF, verified | planned (GTK) | AppKit, window verified |
+| Command line | verified | verified | verified |
 
 "Verified" means it was exercised against real hardware; "implemented" means the code is complete
 but has not yet been run on that platform.
@@ -89,15 +89,19 @@ implemented on the Linux backend.
 
 ## Using it
 
-### Desktop application (Windows)
+### Desktop application
 
-```
-dotnet build src/NksUsbShare.Desktop
-```
+**Windows** — `dotnet build src/NksUsbShare.Desktop`, then run `NksUsbShare.exe`. The first tab
+lists local devices and shares them, the second pairs with other computers and uses their devices,
+and the connection details panel carries the pairing token and key fingerprint the other side
+needs.
 
-Run `NksUsbShare.exe`. The first tab lists local devices and shares them, the second pairs with
-other computers and uses their devices, and the connection details panel carries the pairing token
-and key fingerprint the other side needs.
+**macOS** — `dotnet publish src/NksUsbShare.Mac -r osx-arm64 --self-contained`. The window is
+AppKit, driven straight through the Objective-C runtime, so the application still has no
+dependency of its own. Put the binary in a `.app` bundle so LaunchServices treats it as a normal
+application.
+
+**Linux** — the command line is the interface today; a GTK window is not written yet.
 
 ### Command line (all platforms)
 

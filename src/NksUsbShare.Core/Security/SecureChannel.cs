@@ -34,6 +34,8 @@ public static class SecureChannel
 
         var ssl = new SslStream(inner, leaveInnerStreamOpen: false, (_, certificate, _, _) =>
         {
+            // Whatever it presented is recorded by the caller; only a restricted host insists that
+            // the certificate be one it already knows.
             if (!requireClientCertificate) return true;
             if (certificate is null) return false;
 
@@ -46,7 +48,10 @@ public static class SecureChannel
             await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
             {
                 ServerCertificate = serverCertificate,
-                ClientCertificateRequired = requireClientCertificate,
+                // Always ask, even when any client is welcome: a client only sends its certificate
+                // when the server requests one, and without it the host cannot name the computer it
+                // is talking to, so blocking and per-device access lists would have nothing to match.
+                ClientCertificateRequired = true,
                 EnabledSslProtocols = Protocols,
                 CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
             }, cancellationToken).ConfigureAwait(false);

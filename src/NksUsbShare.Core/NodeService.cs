@@ -204,8 +204,11 @@ public sealed class NodeService : IAsyncDisposable
                 Changed();
             };
 
+            // The identity is always presented. It costs nothing, and without it a host cannot tell
+            // one client from another, so blocking a computer or restricting a device to named
+            // computers would have nothing to match on.
             await client.ConnectAsync(remote.Address, remote.Port, remote.Token, remote.PinnedFingerprint,
-                Settings.HostName, Settings.RequireClientCertificate ? Identity.Certificate : null,
+                Settings.HostName, Identity.Certificate,
                 cancellationToken).ConfigureAwait(false);
 
             // Trust on first use: remember what the host presented so a later change is caught.

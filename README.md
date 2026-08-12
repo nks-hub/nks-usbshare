@@ -95,15 +95,31 @@ normal self for as long as it is shared, which is what sharing a USB device mean
 **Using a remote device as though it were plugged in locally** needs a virtual USB host controller:
 
 - **Linux** already has one in the kernel, `vhci_hcd`. Nothing has to be written or signed.
-- **Windows** has no in-box equivalent. `UdeCx` exists as a class extension but a KMDF client
-  driver still has to be written and signed, which means either an EV certificate with Microsoft
-  attestation signing, or test-signing mode with Secure Boot disabled.
-- **macOS** has no public way to create a virtual USB host controller at all. DriverKit drives real
-  devices; it does not invent them. A kext would need Reduced Security on Apple Silicon.
+- **Windows** has no in-box virtual device, but it does ship the framework to build one:
+  [`UdeCx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/writing-a-ude-client-driver),
+  the USB Device Emulation class extension, present since Windows 10 1903. A KMDF client driver
+  registers an emulated host controller, supplies the descriptors, and completes URBs — the same
+  transfer forwarding this project already does for export, running in the opposite direction.
+  The driver has to be signed to load: [OSSign](https://ossign.org/) signs open-source drivers at
+  no cost through Microsoft Trusted Signing, and Microsoft Trusted Signing itself is roughly $10 a
+  month for closed projects. Either produces a driver that installs on stock Windows 11 with Secure
+  Boot left on. Test-signing works for development but forces Secure Boot off, so it is not a
+  distribution route.
+- **macOS** cannot do this at all today. DriverKit deliberately drives real hardware only —
+  `USBDriverKit` matches on the vendor and product id of a device that is physically present, and
+  Apple applies the same policy elsewhere, explicitly refusing `AudioDriverKit` for virtual audio
+  devices. The one class Apple does permit to be invented is HID, through `HIDDriverKit`'s virtual
+  device entitlement. Everything else means a kernel extension, which on Apple Silicon requires the
+  user to drop Startup Security to "Reduced Security" from Recovery. Every commercial product in
+  this space still ships a kext on macOS for the same reason.
 
 Until that exists on Windows and macOS, a remote device on those platforms is reachable through
 `RemoteUsbDevice` — real control, bulk and interrupt transfers from your own code or the command
 line — but the operating system's own driver stack does not see it.
+
+A driver is only unavoidable for *arbitrary* devices. Storage, printers and scanners each have a
+network protocol both operating systems already speak — iSCSI, IPP, and eSCL — so those three
+classes could be carried with no kernel component anywhere.
 
 ## Repository layout
 

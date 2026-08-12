@@ -23,6 +23,7 @@ try
         "forget" => Forget(),
         "remote" => await RemoteAsync(),
         "import" => await ImportAsync(),
+        "probe" => await ProbeAsync(),
         _ => Unknown(options.Command),
     };
 }
@@ -63,6 +64,7 @@ int Help()
           forget <host[:port]>       drop a host
           remote <host[:port]>       list the devices a host offers
           import <host[:port]> <id>  import a device and hold it until interrupted
+          probe <host[:port]> <id>   read descriptors straight off a remote device
 
         Devices can be named by the index shown in `list`, so `nksusb share 3` works.
         The desktop application hosts the same node with a window; run one or the other,
@@ -360,6 +362,81 @@ async Task<int> ImportAsync()
     await WaitForShutdownAsync(stopping.Token);
     node.ReleaseImport(import.Key);
     return 0;
+}
+
+/// <summary>
+/// Opens a remote device and reads its descriptors straight off the hardware. This is the
+/// end-to-end proof that real USB traffic is crossing the link, not just metadata.
+/// </summary>
+async Task<int> ProbeAsync()
+{
+    if (options.Arguments.Count < 2)
+    {
+        Console.Error.WriteLine("error: probe needs a host and a device id.");
+        return 1;
+    }
+
+    var (node, _) = CreateNode(echo: false);
+    await using var _ = node;
+
+    var remote = RequireRemote(node, options.Arguments[0]);
+    if (remote is null) return 1;
+
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+    var import = await node.ImportDeviceAsync(remote, options.Arguments[1], timeout.Token);
+    var device = import.Device;
+
+    try
+    {
+        Console.WriteLine();
+        Console.WriteLine($"  {device.Info.DisplayName}  ({device.Info.HardwareKey})");
+        Console.WriteLine($"  host {import.HostName} at {import.HostAddress}");
+        Console.WriteLine();
+
+        // GET_DESCRIPTOR(DEVICE): the most basic control transfer there is.
+        var descriptor = await device.GetDescriptorAsync(0x01, 0, length: 18, cancellationToken: timeout.Token);
+        Console.WriteLine($"  device descriptor ({descriptor.Length} bytes)");
+        Console.WriteLine($"    {Convert.ToHexString(descriptor)}");
+
+        if (descriptor.Length >= 18)
+        {
+            var usb = (ushort)(descriptor[2] | (descriptor[3] << 8));
+            var vendor = (ushort)(descriptor[8] | (descriptor[9] << 8));
+            var product = (ushort)(descriptor[10] | (descriptor[11] << 8));
+            Console.WriteLine($"    usb {usb >> 8:x}.{(usb >> 4) & 0xF:x}{usb & 0xF:x}   vendor {vendor:x4}   product {product:x4}   " +
+                              $"class {descriptor[4]:x2}   max packet {descriptor[7]}");
+        }
+
+        // GET_DESCRIPTOR(CONFIGURATION): read the header, then the whole thing.
+        var header = await device.GetDescriptorAsync(0x02, 0, length: 9, cancellationToken: timeout.Token);
+        var total = UsbDescriptorParser.ReadConfigurationTotalLength(header);
+        Console.WriteLine();
+        Console.WriteLine($"  configuration descriptor, {total} bytes total");
+
+        if (total is > 9 and <= 4096)
+        {
+            var configuration = await device.GetDescriptorAsync(0x02, 0, length: (ushort)total, cancellationToken: timeout.Token);
+            Console.WriteLine($"    {Convert.ToHexString(configuration)}");
+
+            foreach (var iface in UsbDescriptorParser.ParseConfiguration(configuration))
+            {
+                Console.WriteLine($"    interface {iface.Number} alt {iface.AlternateSetting}  " +
+                                  $"class {iface.InterfaceClass:x2}/{iface.InterfaceSubClass:x2}/{iface.InterfaceProtocol:x2}");
+                foreach (var endpoint in iface.Endpoints)
+                    Console.WriteLine($"      endpoint 0x{endpoint.Address:x2}  {endpoint.TransferType,-11} " +
+                                      $"{endpoint.MaxPacketSize} bytes  interval {endpoint.Interval}");
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("  Descriptors above came off the remote device over the encrypted link.");
+        Console.WriteLine();
+        return 0;
+    }
+    finally
+    {
+        node.ReleaseImport(import.Key);
+    }
 }
 
 // ---- helpers ----

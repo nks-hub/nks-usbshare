@@ -12,7 +12,7 @@ macOS, WPF for the Windows interface, and the .NET TLS stack for the transport.
 | | Windows | Linux | macOS |
 |---|---|---|---|
 | Enumerate local USB devices | verified | implemented | verified |
-| Share a device (export) | needs driver rebinding, see below | implemented | not implemented |
+| Share a device (export) | verified | implemented | not implemented |
 | Use a remote device from an application | verified | verified | verified |
 | Present a remote device to the whole OS | needs a kernel driver | via in-kernel `vhci_hcd` | needs a kernel driver |
 | Native application window | WPF | planned (GTK) | planned (AppKit) |
@@ -20,6 +20,25 @@ macOS, WPF for the Windows interface, and the .NET TLS stack for the transport.
 
 "Verified" means it was exercised against real hardware; "implemented" means the code is complete
 but has not yet been run on that platform.
+
+The Windows export path was checked end to end: a USB flash drive plugged into one machine was
+rebound to WinUSB with `tools/bind-winusb.ps1`, shared, and then read from a Windows 11 virtual
+machine on another host across a VPN. The virtual machine pulled the device and configuration
+descriptors straight off the hardware — mass storage, class 08/06/50, two 512 byte bulk endpoints
+— proving real transfers cross the encrypted link rather than cached metadata.
+
+```
+nksusb probe 10.0.0.7 'USB\VID_FFFF&PID_5678\9207014AB5258217200'
+
+  Disk 2.0  (ffff:5678)
+  device descriptor (18 bytes)
+    1201000200000040FFFF7856000201020301
+    usb 2.00   vendor ffff   product 5678   class 00   max packet 64
+  configuration descriptor, 32 bytes total
+    interface 0 alt 0  class 08/06/50
+      endpoint 0x01  Bulk        512 bytes
+      endpoint 0x82  Bulk        512 bytes
+```
 
 ## How it fits together
 
@@ -86,11 +105,22 @@ device away from its class driver, or present a virtual one.** This is not an im
 that more user-mode code can close.
 
 **Sharing on Windows** requires the device to be bound to the in-box `winusb.sys` instead of its
-class driver. That rebinding does *not* need a signed kernel driver — `winusb.sys` is already
-Microsoft-signed — but it does need a driver *package*: a generated INF, a catalog signed with a
-certificate placed in the machine's trusted stores, and an install through `newdev.dll`. All of
-those APIs ship with Windows. It needs administrator rights, and the device stops working as its
-normal self for as long as it is shared, which is what sharing a USB device means everywhere.
+class driver. `tools/bind-winusb.ps1` does this, and it needs nothing that is not already on the
+machine: `New-SelfSignedCertificate` for a signing key, `New-FileCatalog` and
+`Set-AuthenticodeSignature` for the driver catalog, and `pnputil` for the install. No WDK, no
+third-party signing tool, and **Secure Boot stays on** — `winusb.sys` is already signed by
+Microsoft, so only the small package that points at it has to be trusted.
+
+```
+tools\bind-winusb.ps1 -HardwareId 'USB\VID_FFFF&PID_5678&REV_0200'   # hand it over
+tools\bind-winusb.ps1 -Status                                        # what is bound
+tools\bind-winusb.ps1 -Restore                                       # give it back
+```
+
+It needs administrator rights, and the device stops working as its normal self for as long as it
+is shared — a flash drive disappears from Explorer, a keyboard stops typing. That is what sharing
+a USB device means on every product that does this. `-Restore` removes the package and puts the
+original class driver back.
 
 **Using a remote device as though it were plugged in locally** needs a virtual USB host controller:
 

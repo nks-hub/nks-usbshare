@@ -1,0 +1,224 @@
+<Window x:Class="NksUsbShare.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NKS UsbShare" Height="700" Width="1040" MinHeight="520" MinWidth="820"
+        WindowStartupLocation="CenterScreen"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+
+    <DockPanel>
+
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="_Refresh" InputGestureText="F5" Click="OnRefresh" />
+                <Separator />
+                <MenuItem Header="Open settings _folder" Click="OnOpenSettingsFolder" />
+                <Separator />
+                <MenuItem Header="E_xit" Click="OnExit" />
+            </MenuItem>
+            <MenuItem Header="_Sharing">
+                <MenuItem x:Name="StartSharingItem" Header="_Start sharing" Click="OnStartSharing" />
+                <MenuItem x:Name="StopSharingItem" Header="S_top sharing" Click="OnStopSharing" />
+                <Separator />
+                <MenuItem Header="Copy pairing _token" Click="OnCopyToken" />
+                <MenuItem Header="Copy key _fingerprint" Click="OnCopyFingerprint" />
+                <Separator />
+                <MenuItem Header="_Regenerate pairing token…" Click="OnRegenerateToken" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_About NKS UsbShare…" Click="OnAbout" />
+            </MenuItem>
+        </Menu>
+
+        <StatusBar DockPanel.Dock="Bottom">
+            <StatusBarItem>
+                <TextBlock x:Name="StatusState" Text="Starting…" FontWeight="SemiBold" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock x:Name="StatusEndpoint" Text="" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock x:Name="StatusCounts" Text="" />
+            </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock x:Name="StatusMessage" Text="" Foreground="#5A5A5A" />
+            </StatusBarItem>
+        </StatusBar>
+
+        <TabControl Margin="8">
+
+            <!-- ============ This computer ============ -->
+            <TabItem Header="This computer">
+                <DockPanel Margin="8">
+
+                    <GroupBox DockPanel.Dock="Bottom" Header="Connection details" Margin="0,8,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Pairing token:" Style="{StaticResource FieldLabel}" />
+                            <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TokenBox" Style="{StaticResource MonoField}"
+                                       FontWeight="Bold" Margin="0,0,16,4" />
+
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Listening on:" Style="{StaticResource FieldLabel}" />
+                            <TextBox   Grid.Row="0" Grid.Column="3" x:Name="EndpointBox" Style="{StaticResource MonoField}" Margin="0,0,0,4" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Key fingerprint:" Style="{StaticResource FieldLabel}" />
+                            <TextBox   Grid.Row="1" Grid.Column="1" x:Name="FingerprintBox" Style="{StaticResource MonoField}" Margin="0,0,16,4" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="This computer:" Style="{StaticResource FieldLabel}" />
+                            <TextBox   Grid.Row="1" Grid.Column="3" x:Name="NodeNameBox" Style="{StaticResource MonoField}" Margin="0,0,0,4" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Reachable at:" Style="{StaticResource FieldLabel}" />
+                            <TextBox   Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="AddressesBox"
+                                       Style="{StaticResource MonoField}" TextWrapping="Wrap" />
+                        </Grid>
+                    </GroupBox>
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button x:Name="ShareButton" Content="Share device" Click="OnShareSelected" IsEnabled="False" />
+                        <Button x:Name="UnshareButton" Content="Stop sharing" Click="OnUnshareSelected" IsEnabled="False" />
+                        <Button Content="Refresh" Click="OnRefresh" />
+                    </StackPanel>
+
+                    <ListView x:Name="LocalDeviceList" SelectionChanged="OnLocalSelectionChanged"
+                              MouseDoubleClick="OnLocalDoubleClick">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Device" Width="240" DisplayMemberBinding="{Binding Name}" />
+                                <GridViewColumn Header="Vendor" Width="130" DisplayMemberBinding="{Binding Manufacturer}" />
+                                <GridViewColumn Header="ID" Width="80" DisplayMemberBinding="{Binding HardwareKey}" />
+                                <GridViewColumn Header="Type" Width="105" DisplayMemberBinding="{Binding Kind}" />
+                                <GridViewColumn Header="Speed" Width="85" DisplayMemberBinding="{Binding Speed}" />
+                                <GridViewColumn Header="Serial number" Width="140" DisplayMemberBinding="{Binding SerialNumber}" />
+                                <GridViewColumn Header="Status" Width="110">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Status}"
+                                                       Foreground="{Binding Status, Converter={StaticResource StateBrush}}"
+                                                       ToolTip="{Binding StatusDetail}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                </DockPanel>
+            </TabItem>
+
+            <!-- ============ Other computers ============ -->
+            <TabItem Header="Other computers">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="150" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="Paired computers" FontWeight="SemiBold" Margin="0,0,0,5" />
+
+                    <ListView Grid.Row="1" x:Name="HostList" SelectionChanged="OnHostSelectionChanged"
+                              MouseDoubleClick="OnBrowseSelectedHost">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Name" Width="190" DisplayMemberBinding="{Binding Name}" />
+                                <GridViewColumn Header="Address" Width="190" DisplayMemberBinding="{Binding Endpoint}" />
+                                <GridViewColumn Header="Status" Width="110">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Status}"
+                                                       Foreground="{Binding Status, Converter={StaticResource StateBrush}}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="Key fingerprint" Width="230" DisplayMemberBinding="{Binding Fingerprint}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Add computer…" Click="OnAddHost" />
+                        <Button x:Name="BrowseButton" Content="Show devices" Click="OnBrowseSelectedHost" IsEnabled="False" />
+                        <Button x:Name="RemoveHostButton" Content="Remove" Click="OnRemoveHost" IsEnabled="False" />
+                    </StackPanel>
+
+                    <TextBlock Grid.Row="3" x:Name="RemoteHeading" Text="Devices offered to this computer"
+                               FontWeight="SemiBold" Margin="0,14,0,5" />
+
+                    <ListView Grid.Row="4" x:Name="RemoteDeviceList" SelectionChanged="OnRemoteSelectionChanged"
+                              MouseDoubleClick="OnImportSelected">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Device" Width="250" DisplayMemberBinding="{Binding Name}" />
+                                <GridViewColumn Header="Vendor" Width="140" DisplayMemberBinding="{Binding Manufacturer}" />
+                                <GridViewColumn Header="ID" Width="80" DisplayMemberBinding="{Binding HardwareKey}" />
+                                <GridViewColumn Header="Type" Width="110" DisplayMemberBinding="{Binding Kind}" />
+                                <GridViewColumn Header="Speed" Width="90" DisplayMemberBinding="{Binding Speed}" />
+                                <GridViewColumn Header="Status" Width="110">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Status}"
+                                                       Foreground="{Binding Status, Converter={StaticResource StateBrush}}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <StackPanel Grid.Row="5" Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button x:Name="ImportButton" Content="Use this device" Click="OnImportSelected" IsEnabled="False" />
+                        <Button x:Name="ReleaseButton" Content="Release" Click="OnReleaseSelected" IsEnabled="False" />
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <!-- ============ Connected clients ============ -->
+            <TabItem Header="Connected clients">
+                <DockPanel Margin="8">
+                    <TextBlock DockPanel.Dock="Top" Text="Computers currently using devices from here"
+                               FontWeight="SemiBold" Margin="0,0,0,5" />
+                    <ListView x:Name="ClientList">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Computer" Width="200" DisplayMemberBinding="{Binding Name}" />
+                                <GridViewColumn Header="Address" Width="170" DisplayMemberBinding="{Binding Address}" />
+                                <GridViewColumn Header="Platform" Width="200" DisplayMemberBinding="{Binding Platform}" />
+                                <GridViewColumn Header="Devices in use" Width="110" DisplayMemberBinding="{Binding DeviceCount}" />
+                                <GridViewColumn Header="Connected since" Width="140" DisplayMemberBinding="{Binding Since}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </DockPanel>
+            </TabItem>
+
+            <!-- ============ Activity ============ -->
+            <TabItem Header="Activity">
+                <DockPanel Margin="8">
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Copy to clipboard" Click="OnCopyLog" />
+                        <Button Content="Clear" Click="OnClearLog" />
+                    </StackPanel>
+                    <ListBox x:Name="LogList" FontFamily="Consolas" FontSize="12"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                </DockPanel>
+            </TabItem>
+
+        </TabControl>
+    </DockPanel>
+</Window>

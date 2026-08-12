@@ -1,6 +1,3 @@
-using System.Diagnostics;
-using System.Net.Http.Json;
-using NksUsbShare.App.Web;
 using NksUsbShare.Core;
 using NksUsbShare.Core.Configuration;
 using NksUsbShare.Core.Diagnostics;
@@ -15,12 +12,11 @@ try
     {
         "help" or "--help" or "-h" => Help(),
         "version" or "--version" => Version(),
-        "run" => await RunAsync(withInterface: true),
-        "serve" => await RunAsync(withInterface: false),
+        "serve" or "run" => await ServeAsync(),
         "list" => await ListAsync(),
         "share" => await SetShareAsync(share: true),
         "unshare" => await SetShareAsync(share: false),
-        "token" => await TokenAsync(),
+        "token" => Token(),
         "info" => await InfoAsync(),
         "hosts" => Hosts(),
         "pair" => Pair(),
@@ -35,7 +31,7 @@ catch (UsbBackendException ex)
     Console.Error.WriteLine($"error: {ex.Message}");
     return 1;
 }
-catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
+catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException or System.Net.Sockets.SocketException)
 {
     Console.Error.WriteLine($"error: {ex.Message}");
     return 1;
@@ -52,8 +48,7 @@ int Help()
           nksusb [command] [arguments] [--home <dir>]
 
         RUNNING
-          run                        start the node and open the control panel (default)
-          serve                      start the node without the web interface
+          serve                      run the node in this terminal until interrupted
 
         THIS MACHINE
           list                       show local USB devices and what is shared
@@ -70,6 +65,8 @@ int Help()
           import <host[:port]> <id>  import a device and hold it until interrupted
 
         Devices can be named by the index shown in `list`, so `nksusb share 3` works.
+        The desktop application hosts the same node with a window; run one or the other,
+        not both, because they would compete for the same port.
         """);
     return 0;
 }
@@ -87,7 +84,7 @@ int Unknown(string command)
     return 1;
 }
 
-async Task<int> RunAsync(bool withInterface)
+async Task<int> ServeAsync()
 {
     var (node, log) = CreateNode(echo: true);
     await using var _ = node;
@@ -99,25 +96,21 @@ async Task<int> RunAsync(bool withInterface)
         stopping.Cancel();
     };
 
-    await node.StartHostAsync(stopping.Token);
-    await node.AutoConnectAsync(stopping.Token);
-
-    if (!withInterface)
+    try
     {
-        log.Info("app", "Running headless. Press Ctrl+C to stop.");
-        await WaitForShutdownAsync(stopping.Token);
-        return 0;
+        await node.StartHostAsync(stopping.Token);
+    }
+    catch (System.Net.Sockets.SocketException ex)
+    {
+        Console.Error.WriteLine($"error: cannot listen on {node.Settings.LinkBindAddress}:{node.Settings.LinkPort} — {ex.Message}");
+        Console.Error.WriteLine("Another instance, or the desktop application, may already be running.");
+        return 1;
     }
 
-    var app = WebInterface.Build(node, []);
-    await app.StartAsync(stopping.Token);
-
-    var url = $"http://{(node.Settings.WebUiBindAddress == "0.0.0.0" ? "127.0.0.1" : node.Settings.WebUiBindAddress)}:{node.Settings.WebUiPort}";
-    log.Info("app", $"Control panel at {url}");
-    OpenBrowser(url);
+    await node.AutoConnectAsync(stopping.Token);
+    log.Info("app", "Running. Press Ctrl+C to stop.");
 
     await WaitForShutdownAsync(stopping.Token);
-    await app.StopAsync(CancellationToken.None);
     return 0;
 }
 
@@ -142,18 +135,18 @@ async Task<int> ListAsync()
         var (device, share) = devices[index];
         var state = share is { Enabled: true } ? "shared"
             : share is not null ? "shared (off)"
-            : device.ShareBlockedReason is not null ? "unavailable"
+            : device.ShareBlockedReason is not null ? "needs release"
             : "private";
 
         Console.WriteLine($"  {index + 1,-3} {device.HardwareKey,-10} {Truncate(device.DisplayName, 34),-34} " +
-                          $"{ViewMapper.Describe(device.Speed),-11} {state}");
+                          $"{UsbDisplay.Speed(device.Speed),-11} {state}");
     }
 
     var blocked = devices.Where(d => d.Device.ShareBlockedReason is not null).ToList();
     if (blocked.Count > 0)
     {
         Console.WriteLine();
-        Console.WriteLine("  Unavailable devices:");
+        Console.WriteLine("  Held by another driver:");
         foreach (var (device, _) in blocked)
             Console.WriteLine($"    {device.DisplayName}: {device.ShareBlockedReason}");
     }
@@ -190,11 +183,10 @@ async Task<int> SetShareAsync(bool share)
         Console.WriteLine($"Stopped sharing {device.DisplayName}.");
     }
 
-    await NotifyRunningDaemonAsync(node.Settings, share ? "/api/share" : "/api/unshare", new { deviceId });
     return 0;
 }
 
-async Task<int> TokenAsync()
+int Token()
 {
     var settings = NodeSettings.LoadOrCreate(options.Home);
 
@@ -203,7 +195,6 @@ async Task<int> TokenAsync()
         settings.PairingToken = AccessToken.Generate();
         settings.Save();
         Console.WriteLine("A new pairing token was generated. Existing clients must pair again.");
-        await NotifyRunningDaemonAsync(settings, "/api/token/regenerate", new { });
     }
 
     Console.WriteLine(settings.PairingToken);
@@ -222,12 +213,10 @@ async Task<int> InfoAsync()
     Console.WriteLine($"  Fingerprint     {node.Identity.Fingerprint}");
     Console.WriteLine($"  Pairing token   {node.Settings.PairingToken}");
     Console.WriteLine($"  Link            {node.Settings.LinkBindAddress}:{node.Settings.LinkPort}");
-    Console.WriteLine($"  Control panel   {node.Settings.WebUiBindAddress}:{node.Settings.WebUiPort}");
     Console.WriteLine($"  Settings        {node.Settings.SourcePath}");
 
-    var addresses = WebInterface.LocalAddresses();
-    if (addresses.Count > 0)
-        Console.WriteLine($"  Reachable at    {string.Join(", ", addresses)}");
+    var addresses = UsbDisplay.LocalAddresses();
+    if (addresses.Count > 0) Console.WriteLine($"  Reachable at    {string.Join(", ", addresses)}");
 
     Console.WriteLine();
     return 0;
@@ -281,7 +270,7 @@ int Pair()
     else
     {
         existing.Token = options.Arguments[1];
-        // A new token means the operator expects a fresh pairing, so drop the old pin.
+        // A fresh token means the operator expects a fresh pairing, so drop the old pin.
         existing.PinnedFingerprint = null;
     }
 
@@ -320,15 +309,8 @@ async Task<int> RemoteAsync()
     var (node, _) = CreateNode(echo: false);
     await using var _ = node;
 
-    var (address, port) = SplitHost(options.Arguments[0]);
-    var remote = node.Settings.RemoteHosts.FirstOrDefault(h =>
-        h.Address.Equals(address, StringComparison.OrdinalIgnoreCase) && h.Port == port);
-
-    if (remote is null)
-    {
-        Console.Error.WriteLine($"error: {address}:{port} is not paired. Run `nksusb pair {address}:{port} <token>` first.");
-        return 1;
-    }
+    var remote = RequireRemote(node, options.Arguments[0]);
+    if (remote is null) return 1;
 
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
     var devices = await node.ListRemoteDevicesAsync(remote, timeout.Token);
@@ -344,7 +326,7 @@ async Task<int> RemoteAsync()
     {
         Console.WriteLine($"  {device.DisplayName}");
         Console.WriteLine($"    id     {device.DeviceId}");
-        Console.WriteLine($"    usb    {device.HardwareKey}  {ViewMapper.Describe(device.Speed)}  {ViewMapper.DescribeKind(device)}");
+        Console.WriteLine($"    usb    {device.HardwareKey}  {UsbDisplay.Speed(device.Speed)}  {UsbDisplay.Kind(device)}");
         if (device.SerialNumber.Length > 0) Console.WriteLine($"    serial {device.SerialNumber}");
     }
     Console.WriteLine();
@@ -362,15 +344,8 @@ async Task<int> ImportAsync()
     var (node, log) = CreateNode(echo: true);
     await using var _ = node;
 
-    var (address, port) = SplitHost(options.Arguments[0]);
-    var remote = node.Settings.RemoteHosts.FirstOrDefault(h =>
-        h.Address.Equals(address, StringComparison.OrdinalIgnoreCase) && h.Port == port);
-
-    if (remote is null)
-    {
-        Console.Error.WriteLine($"error: {address}:{port} is not paired.");
-        return 1;
-    }
+    var remote = RequireRemote(node, options.Arguments[0]);
+    if (remote is null) return 1;
 
     using var stopping = new CancellationTokenSource();
     Console.CancelKeyPress += (_, eventArgs) =>
@@ -394,6 +369,18 @@ async Task<int> ImportAsync()
     var settings = NodeSettings.LoadOrCreate(options.Home);
     var log = new ActivityLog { EchoToConsole = echo };
     return (new NodeService(settings, log), log);
+}
+
+RemoteHost? RequireRemote(NodeService node, string reference)
+{
+    var (address, port) = SplitHost(reference);
+    var remote = node.Settings.RemoteHosts.FirstOrDefault(h =>
+        h.Address.Equals(address, StringComparison.OrdinalIgnoreCase) && h.Port == port);
+
+    if (remote is not null) return remote;
+
+    Console.Error.WriteLine($"error: {address}:{port} is not paired. Run `nksusb pair {address}:{port} <token>` first.");
+    return null;
 }
 
 static async Task WaitForShutdownAsync(CancellationToken cancellationToken)
@@ -435,47 +422,12 @@ static string? ResolveDeviceId(string reference, IReadOnlyList<UsbDeviceInfo> de
 static (string Address, int Port) SplitHost(string value)
 {
     var separator = value.LastIndexOf(':');
-    if (separator > 0 && int.TryParse(value[(separator + 1)..], out var port))
-        return (value[..separator], port);
+    if (separator > 0 && int.TryParse(value[(separator + 1)..], out var port)) return (value[..separator], port);
     return (value, DefaultPorts.Link);
 }
 
 static string Truncate(string value, int width)
     => value.Length <= width ? value : value[..(width - 1)] + "…";
-
-/// <summary>
-/// A running daemon holds settings in memory, so a change made from the command line has to be
-/// told to it. Failure is expected and silent: it simply means nothing is running.
-/// </summary>
-static async Task NotifyRunningDaemonAsync(NodeSettings settings, string path, object body)
-{
-    try
-    {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-        await http.PostAsJsonAsync($"http://127.0.0.1:{settings.WebUiPort}{path}", body);
-    }
-    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-    {
-        // No daemon listening; the settings file is the source of truth for the next start.
-    }
-}
-
-static void OpenBrowser(string url)
-{
-    try
-    {
-        if (OperatingSystem.IsWindows())
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-        else if (OperatingSystem.IsMacOS())
-            Process.Start("open", url);
-        else
-            Process.Start("xdg-open", url);
-    }
-    catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or FileNotFoundException)
-    {
-        // Headless machines have no browser to open; the URL was already printed.
-    }
-}
 
 /// <summary>Minimal argument parsing: a verb, positional arguments, and --flags.</summary>
 internal sealed record CommandLine(string Command, IReadOnlyList<string> Arguments, IReadOnlySet<string> Flags, string? Home)
@@ -505,7 +457,7 @@ internal sealed record CommandLine(string Command, IReadOnlyList<string> Argumen
             flags.Add(name);
         }
 
-        var command = positional.Count > 0 ? positional[0] : "run";
+        var command = positional.Count > 0 ? positional[0] : "help";
         if (flags.Contains("help") || flags.Contains("h")) command = "help";
         if (flags.Contains("version")) command = "version";
 

@@ -1,0 +1,64 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:NksUsbShare.Desktop">
+
+    <!-- Deliberately thin. The application uses the platform's own control appearance; the only
+         things set here are the system font and a handful of converters. -->
+
+    <local:BoolToVisibleConverter x:Key="BoolToVisible" />
+    <local:NotConverter x:Key="Not" />
+    <local:StateBrushConverter x:Key="StateBrush" />
+
+    <FontFamily x:Key="Ui">Segoe UI</FontFamily>
+    <FontFamily x:Key="Mono">Consolas</FontFamily>
+
+    <Style TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Ui}" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+
+    <Style x:Key="MonoField" TargetType="TextBox">
+        <Setter Property="FontFamily" Value="{StaticResource Mono}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="IBeam" />
+    </Style>
+
+    <Style x:Key="FieldLabel" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Ui}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="#5A5A5A" />
+        <Setter Property="Margin" Value="0,0,10,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style TargetType="Button">
+        <Setter Property="FontFamily" Value="{StaticResource Ui}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="MinWidth" Value="104" />
+        <Setter Property="Padding" Value="10,4" />
+        <Setter Property="Margin" Value="0,0,6,0" />
+    </Style>
+
+    <Style TargetType="ListView">
+        <Setter Property="FontFamily" Value="{StaticResource Ui}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="BorderBrush" Value="#D0D0D0" />
+    </Style>
+
+    <Style TargetType="GroupBox">
+        <Setter Property="FontFamily" Value="{StaticResource Ui}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Padding" Value="10,8" />
+    </Style>
+
+    <Style TargetType="TabItem">
+        <Setter Property="FontFamily" Value="{StaticResource Ui}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Padding" Value="14,6" />
+    </Style>
+
+</ResourceDictionary>

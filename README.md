@@ -101,7 +101,13 @@ AppKit, driven straight through the Objective-C runtime, so the application stil
 dependency of its own. Put the binary in a `.app` bundle so LaunchServices treats it as a normal
 application.
 
-**Linux** — the command line is the interface today; a GTK window is not written yet.
+**Linux** — `dotnet publish src/NksUsbShare.Gtk -r linux-x64 --self-contained`, then run
+`nksusb-gtk`. The window is GTK 3 through plain P/Invoke; GTK is already on every Linux desktop,
+so nothing new is installed. On a machine with no display it says so and exits rather than
+failing obscurely.
+
+All three windows show the same thing in the same shape: identity and pairing details pinned at
+the top, then a table of devices with a button per row.
 
 ### Command line (all platforms)
 
@@ -188,8 +194,11 @@ classes could be carried with no kernel component anywhere.
 src/NksUsbShare.Core      protocol, security, USB backends, host and client engines
 src/NksUsbShare.Cli       cross-platform command line
 src/NksUsbShare.Desktop   WPF application for Windows
+src/NksUsbShare.Mac       AppKit application for macOS, on the Objective-C runtime
+src/NksUsbShare.Gtk       GTK application for Linux
 src/NksUsbShare.Mcp       management server speaking the Model Context Protocol
 tests/NksUsbShare.Tests   test suite
+tools/bind-winusb.ps1     hands a Windows device to WinUSB so it can be shared, and back again
 ```
 
 ## Tests

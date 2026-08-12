@@ -1,4 +1,5 @@
 using NksUsbShare.Core;
+using NksUsbShare.Core.Client;
 using NksUsbShare.Core.Configuration;
 using NksUsbShare.Core.Diagnostics;
 using NksUsbShare.Core.Security;
@@ -24,6 +25,7 @@ try
         "remote" => await RemoteAsync(),
         "import" => await ImportAsync(),
         "probe" => await ProbeAsync(),
+        "attach" => await AttachAsync(),
         _ => Unknown(options.Command),
     };
 }
@@ -65,6 +67,8 @@ int Help()
           remote <host[:port]>       list the devices a host offers
           import <host[:port]> <id>  import a device and hold it until interrupted
           probe <host[:port]> <id>   read descriptors straight off a remote device
+          attach <host[:port]> <id>  hand a remote device to this machine's USB stack, so every
+                                     application sees it as though it were plugged in here
 
         Devices can be named by the index shown in `list`, so `nksusb share 3` works.
         The desktop application hosts the same node with a window; run one or the other,
@@ -437,6 +441,74 @@ async Task<int> ProbeAsync()
     {
         node.ReleaseImport(import.Key);
     }
+}
+
+/// <summary>
+/// Imports a device and hands it to the machine's own virtual USB host controller, so the whole
+/// operating system sees it rather than just this process.
+/// </summary>
+async Task<int> AttachAsync()
+{
+    if (options.Arguments.Count < 2)
+    {
+        Console.Error.WriteLine("error: attach needs a host and a device id.");
+        return 1;
+    }
+
+    var (node, log) = CreateNode(echo: true);
+    await using var _ = node;
+
+    var remote = RequireRemote(node, options.Arguments[0]);
+    if (remote is null) return 1;
+
+    using var stopping = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, eventArgs) =>
+    {
+        eventArgs.Cancel = true;
+        stopping.Cancel();
+    };
+
+    var import = await node.ImportDeviceAsync(remote, options.Arguments[1], stopping.Token);
+    var port = options.Flags.Contains("port") ? 3240 : 3240;
+    var busId = await node.PublishToLocalControllerAsync(import, port, stopping.Token);
+
+    var controller = LocalUsbController.Locate();
+    if (controller is null)
+    {
+        Console.WriteLine();
+        Console.WriteLine("  No virtual USB host controller is installed, so the device cannot be handed to the");
+        Console.WriteLine("  operating system. It is still reachable from this process.");
+        Console.WriteLine($"  A controller speaking USB/IP can attach to 127.0.0.1:{node.LocalController.Port} bus id {busId}.");
+        Console.WriteLine();
+    }
+    else
+    {
+        log.Info("attach", $"Asking the local controller to attach bus id {busId}.");
+        var attached = await controller.AttachAsync(node.LocalController.Port, busId, stopping.Token);
+        if (!attached)
+        {
+            Console.Error.WriteLine("error: the local controller refused to attach the device.");
+            node.ReleaseImport(import.Key);
+            return 1;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  {import.Device.Info.DisplayName} is now attached to this machine.");
+        Console.WriteLine("  It should appear in the operating system as a locally connected device.");
+        Console.WriteLine("  Press Ctrl+C to give it back.");
+        Console.WriteLine();
+    }
+
+    await WaitForShutdownAsync(stopping.Token);
+
+    if (controller is not null)
+    {
+        log.Info("attach", "Detaching.");
+        await controller.DetachAsync(busId, CancellationToken.None);
+    }
+
+    node.ReleaseImport(import.Key);
+    return 0;
 }
 
 // ---- helpers ----

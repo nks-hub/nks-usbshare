@@ -34,6 +34,12 @@ public sealed class NodeService : IAsyncDisposable
     public ActivityLog Log { get; }
     public HostServer Host { get; }
 
+    /// <summary>
+    /// Presents imported devices to the machine's own virtual USB host controller, which is what
+    /// makes a remote device visible to every application rather than only to this process.
+    /// </summary>
+    public UsbIpEndpoint LocalController { get; }
+
     /// <summary>Raised whenever something changed that a user interface would want to redraw for.</summary>
     public event Action? StateChanged;
 
@@ -45,6 +51,7 @@ public sealed class NodeService : IAsyncDisposable
         Identity = NodeIdentity.LoadOrCreate(
             Path.GetDirectoryName(settings.SourcePath) ?? NodeSettings.DefaultStateDirectory, settings.HostName);
         Host = new HostServer(settings, Identity, Backend, log);
+        LocalController = new UsbIpEndpoint(log);
     }
 
     public IReadOnlyCollection<ActiveImport> Imports => _imports.Values.ToArray();
@@ -227,9 +234,22 @@ public sealed class NodeService : IAsyncDisposable
     {
         if (!_imports.TryRemove(importKey, out var import)) return;
 
+        LocalController.Withdraw(import.Device);
         import.Device.Dispose();
         Log.Info("import", $"Released {import.Device.Info.DisplayName}.");
         Changed();
+    }
+
+    /// <summary>
+    /// Publishes an imported device to the local virtual controller and returns the bus id the
+    /// controller should attach to. Starts the endpoint on first use.
+    /// </summary>
+    public async Task<string> PublishToLocalControllerAsync(ActiveImport import, int port, CancellationToken cancellationToken)
+    {
+        if (!LocalController.IsRunning)
+            await LocalController.StartAsync(port, cancellationToken).ConfigureAwait(false);
+
+        return LocalController.Publish(import.Device);
     }
 
     public RemoteHost? FindRemote(string addressOrName)
@@ -291,6 +311,8 @@ public sealed class NodeService : IAsyncDisposable
 
         foreach (var client in _connections.Values) await client.DisposeAsync().ConfigureAwait(false);
         _connections.Clear();
+
+        await LocalController.DisposeAsync().ConfigureAwait(false);
 
         await Host.DisposeAsync().ConfigureAwait(false);
         Identity.Certificate.Dispose();

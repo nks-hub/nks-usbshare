@@ -26,6 +26,9 @@ public sealed class RemoteUsbDevice : IUsbDeviceHandle
     public Task<UrbResult> SubmitAsync(UrbRequest request, CancellationToken cancellationToken)
         => _client.SubmitUrbAsync(SessionId, request, cancellationToken);
 
+    /// <summary>Allocates a transfer identifier, for callers that build their own URBs.</summary>
+    public ulong NextUrbId() => _client.NextUrbId();
+
     /// <summary>
     /// Cancellation travels to the host as its own message, so this only reports that the request
     /// was sent. Whether the transfer was still abortable is decided on the far side.

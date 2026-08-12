@@ -47,8 +47,8 @@ public sealed class StateBrushConverter : IValueConverter
         {
             "Shared" or "Connected" or "Attached" => Active,
             "Imported" => Muted,
-            "Unavailable" or "Blocked" => Problem,
-            "Not shared" or "Disconnected" => Muted,
+            "Blocked" => Problem,
+            "Not shared" or "Disconnected" or "Held by system" => Muted,
             _ => Normal,
         };
 

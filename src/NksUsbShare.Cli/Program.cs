@@ -140,7 +140,7 @@ async Task<int> ListAsync()
         var (device, share) = devices[index];
         var state = share is { Enabled: true } ? "shared"
             : share is not null ? "shared (off)"
-            : device.ShareBlockedReason is not null ? "needs release"
+            : device.ShareBlockedReason is not null ? "held by system"
             : "private";
 
         Console.WriteLine($"  {index + 1,-3} {device.HardwareKey,-10} {Truncate(device.DisplayName, 34),-34} " +
@@ -151,7 +151,7 @@ async Task<int> ListAsync()
     if (blocked.Count > 0)
     {
         Console.WriteLine();
-        Console.WriteLine("  Held by another driver:");
+        Console.WriteLine("  Held by the operating system — `nksusb share` can claim these:");
         foreach (var (device, _) in blocked)
             Console.WriteLine($"    {device.DisplayName}: {device.ShareBlockedReason}");
     }

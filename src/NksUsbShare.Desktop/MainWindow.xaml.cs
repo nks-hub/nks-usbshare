@@ -77,7 +77,7 @@ public partial class MainWindow : Window
                 Kind = UsbDisplay.Kind(device),
                 Speed = UsbDisplay.Speed(device.Speed),
                 SerialNumber = device.SerialNumber,
-                Status = device.ShareBlockedReason is not null ? "Unavailable" : shared ? "Shared" : "Not shared",
+                Status = device.ShareBlockedReason is not null ? "Held by system" : shared ? "Shared" : "Not shared",
                 StatusDetail = device.ShareBlockedReason,
                 IsShared = shared,
                 CanShare = device.ShareBlockedReason is null,

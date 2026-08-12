@@ -133,22 +133,24 @@ device away from its class driver, or present a virtual one.** This is not an im
 that more user-mode code can close.
 
 **Sharing on Windows** requires the device to be bound to the in-box `winusb.sys` instead of its
-class driver. `tools/bind-winusb.ps1` does this, and it needs nothing that is not already on the
-machine: `New-SelfSignedCertificate` for a signing key, `New-FileCatalog` and
-`Set-AuthenticodeSignature` for the driver catalog, and `pnputil` for the install. No WDK, no
-third-party signing tool, and **Secure Boot stays on** — `winusb.sys` is already signed by
+class driver. **The applications do this themselves** — sharing a device Windows is holding asks
+for administrator approval and then hands it over. Nothing has to be installed for that:
+`New-SelfSignedCertificate` provides a signing key, `New-FileCatalog` and
+`Set-AuthenticodeSignature` build and sign the driver catalog, and `pnputil` installs it. No WDK,
+no third-party signing tool, and **Secure Boot stays on** — `winusb.sys` is already signed by
 Microsoft, so only the small package that points at it has to be trusted.
 
 ```
-tools\bind-winusb.ps1 -HardwareId 'USB\VID_FFFF&PID_5678&REV_0200'   # hand it over
-tools\bind-winusb.ps1 -Status                                        # what is bound
-tools\bind-winusb.ps1 -Restore                                       # give it back
+nksusb share 7          # claims the device from Windows first if it has to
+nksusb giveback         # returns every claimed device to its original driver
 ```
 
-It needs administrator rights, and the device stops working as its normal self for as long as it
-is shared — a flash drive disappears from Explorer, a keyboard stops typing. That is what sharing
-a USB device means on every product that does this. `-Restore` removes the package and puts the
-original class driver back.
+In the desktop application the button reads *Claim and share*, and *Sharing → Give devices back*
+undoes it. The same helper is available on its own as `tools/bind-winusb.ps1` for scripted setups.
+
+While a device is shared it stops working as its normal self: a flash drive disappears from
+Explorer, a keyboard stops typing. That is what sharing a USB device means on every product that
+does this, and giving it back restores the original driver.
 
 **Using a remote device as though it were plugged in locally** needs a virtual USB host controller.
 Only kernel-mode code can create one, so this is the single piece the project does not provide

@@ -83,9 +83,14 @@ implemented on the Linux backend.
   ever changes. There is no certificate authority, because there is no third party in the link.
 - **Pairing tokens.** 125 bits of entropy, compared in constant time, shown in groups of five
   characters with the ambiguous ones removed so they can be read aloud.
-- **Per-device access control.** A share can be restricted to named client fingerprints; the
-  default is any client that knows the pairing token.
-- **Optional mutual TLS**, where clients must also present a key the host already knows.
+- **Every client is named.** A client always presents its own key, so the host records which
+  computers have used it and can tell them apart. Nothing has to be turned on for this.
+- **Per-device access control.** A share can be restricted to named computers; the default is any
+  client that knows the pairing token.
+- **Blocking.** A computer can be refused outright. It is disconnected at once and anything it was
+  holding is released, so blocking does not wait for it to come back.
+- **Optional mutual TLS**, where a client must present a key the host already knows before the
+  handshake completes at all.
 
 ## Using it
 
@@ -107,7 +112,13 @@ so nothing new is installed. On a machine with no display it says so and exits r
 failing obscurely.
 
 All three windows show the same thing in the same shape: identity and pairing details pinned at
-the top, then a table of devices with a button per row.
+the top, then a table of devices with a button per row. Each of them also lists the computers that
+have connected, with a button to block or re-admit one; the Windows window adds a dialog per share
+for choosing exactly which computers may use it, and a settings dialog for the node name, listening
+address, port and whether a known key is required.
+
+All of them accept `--home <dir>` like the terminal application, so a second node can be run beside
+the real one without disturbing its settings.
 
 ### Command line (all platforms)
 
@@ -121,7 +132,16 @@ nksusb serve                         # run the node until interrupted
 nksusb pair 192.0.2.10 ABCDE-FGHIJ-KLMNO-PQRST-UVWXY
 nksusb remote 192.0.2.10             # what that host offers
 nksusb import 192.0.2.10 <device-id> # hold a device until interrupted
+
+nksusb clients                       # computers that have connected here
+nksusb access 3 anyone               # offer the third device to any paired computer
+nksusb access 3 laptop workshop      # or only to those two
+nksusb block laptop                  # refuse a computer even with the right token
 ```
+
+A computer can be named by its name or by any unambiguous part of its key fingerprint. These
+commands write the settings file, so a node that is already running picks them up when it restarts;
+the windowed applications change their own running node straight away.
 
 Settings live in `%APPDATA%\nks-usbshare` or `~/.config/nks-usbshare`, overridable with
 `NKS_USBSHARE_HOME`.

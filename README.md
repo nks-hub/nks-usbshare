@@ -182,9 +182,27 @@ Which controller answers depends on the platform:
   user to drop Startup Security to "Reduced Security" from Recovery. Every commercial product in
   this space still ships a kext on macOS for the same reason.
 
-Until that exists on Windows and macOS, a remote device on those platforms is reachable through
-`RemoteUsbDevice` — real control, bulk and interrupt transfers from your own code or the command
-line — but the operating system's own driver stack does not see it.
+On macOS, where no virtual device can be created at all, a remote device is still reachable
+through `RemoteUsbDevice` — real control, bulk and interrupt transfers from your own code — the
+operating system's driver stack simply does not see it. For storage that is enough to be useful:
+`nksusb storage` speaks SCSI over Bulk-Only Transport and reads the medium directly.
+
+```
+nksusb storage 10.0.0.7 'USB\VID_FFFF&PID_5678\9207014AB5258217200'
+
+  SCSI inquiry     Generic Flash Disk rev 2.00
+  capacity         31,334,400 blocks of 512 bytes (14.94 GB)
+  partition        type 0x0c, 31,332,288 blocks from 2,048
+  volume label     20250512-PL
+
+  root directory   4 entries
+    <dir> System Volume Information            2026-05-13 19:42
+          Nový WinRAR archiv.rar                       24  2026-08-12 23:00
+          nks-usbshare-test.txt                        80  2026-08-12 23:01
+          nks-usbshare-2mb.bin                  2,097,152  2026-08-12 23:01
+```
+
+That listing was produced on a Mac, from a flash drive plugged into a Windows machine.
 
 A driver is only unavoidable for *arbitrary* devices. Storage, printers and scanners each have a
 network protocol both operating systems already speak — iSCSI, IPP, and eSCL — so those three

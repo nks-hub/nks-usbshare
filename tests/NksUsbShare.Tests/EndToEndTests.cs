@@ -153,6 +153,58 @@ public static class EndToEndTests
             Assert.Equal(ProtocolError.AccessDenied, rejection!.Code, "refusal reason");
         });
 
+        TestRunner.Add(suite, "a client is recorded by its key, so it can be named later", async () =>
+        {
+            await using var harness = await StartHostAsync();
+            var clientIdentity = harness.CreateClientIdentity("laptop");
+
+            await using var client = await harness.ConnectClientAsync(clientIdentity: clientIdentity);
+            await client.ListDevicesAsync(CancellationToken.None);
+
+            var known = harness.Settings.KnownClients
+                .FirstOrDefault(c => NodeIdentity.FingerprintsMatch(c.Fingerprint, clientIdentity.Fingerprint));
+
+            Assert.NotNull(known, "the host remembered the computer that connected");
+            Assert.Equal("test-client", known!.Name, "under the name it introduced itself with");
+        });
+
+        TestRunner.Add(suite, "an allow list naming a real client lets exactly that client in", async () =>
+        {
+            await using var harness = await StartHostAsync();
+            var allowed = harness.CreateClientIdentity("allowed");
+            var refused = harness.CreateClientIdentity("refused");
+            harness.Settings.Shares[0].AllowedClients.Add(allowed.Fingerprint);
+
+            await using (var client = await harness.ConnectClientAsync(clientIdentity: allowed))
+            {
+                var devices = await client.ListDevicesAsync(CancellationToken.None);
+                Assert.Equal(1, devices.Count, "the named computer sees the device");
+            }
+
+            await using var other = await harness.ConnectClientAsync(clientIdentity: refused);
+            Assert.Equal(0, (await other.ListDevicesAsync(CancellationToken.None)).Count,
+                "any other computer sees nothing");
+        });
+
+        TestRunner.Add(suite, "blocking a computer drops the link it is holding", async () =>
+        {
+            await using var harness = await StartHostAsync();
+            var clientIdentity = harness.CreateClientIdentity("intruder");
+
+            await using var client = await harness.ConnectClientAsync(clientIdentity: clientIdentity);
+            using var device = await client.OpenDeviceAsync(FakeUsbBackend.FlashDriveId, CancellationToken.None);
+            Assert.Equal(1, harness.Backend.OpenCount, "the device is open");
+
+            var dropped = await harness.Host.DisconnectClientAsync(clientIdentity.Fingerprint);
+            Assert.Equal(1, dropped, "the live session was dropped");
+
+            // The read loop unwinds on its own thread, so give it room even on a loaded machine.
+            for (var attempt = 0; attempt < 250 && harness.Backend.DisposeCount == 0; attempt++)
+                await Task.Delay(20);
+
+            Assert.Equal(1, harness.Backend.DisposeCount, "and the device it held was released");
+        });
+
         TestRunner.Add(suite, "closing a device releases it on the host", async () =>
         {
             await using var harness = await StartHostAsync();

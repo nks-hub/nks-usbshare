@@ -50,13 +50,21 @@ public sealed class EndToEndHarness : IAsyncDisposable
         };
     }
 
-    public async Task<UsbShareClient> ConnectClientAsync(string? token = null)
+    public async Task<UsbShareClient> ConnectClientAsync(string? token = null, NodeIdentity? clientIdentity = null)
     {
         var client = new UsbShareClient(new ActivityLog());
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         await client.ConnectAsync("127.0.0.1", Host.Port, token ?? Settings.PairingToken,
-            Identity.Fingerprint, "test-client", null, timeout.Token);
+            Identity.Fingerprint, "test-client", clientIdentity?.Certificate, timeout.Token);
         return client;
+    }
+
+    /// <summary>A separate key, so a test can act as a second computer.</summary>
+    public NodeIdentity CreateClientIdentity(string name)
+    {
+        var directory = Path.Combine(StateDirectory, "clients", name);
+        Directory.CreateDirectory(directory);
+        return NodeIdentity.LoadOrCreate(directory, name);
     }
 
     public async ValueTask DisposeAsync()

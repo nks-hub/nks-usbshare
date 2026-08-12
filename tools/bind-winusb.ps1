@@ -254,11 +254,13 @@ function Invoke-Restore {
         Write-Host $output.Trim()
     }
 
-    # Re-enumerate so Windows picks the best remaining driver, which is the class driver each
-    # device came with.
+    # Restart each device so Windows re-picks the best remaining driver, which is the class driver
+    # it came with. This must be /restart-device: /remove-device tears the node out of the tree and
+    # a USB hub will not re-report a port that never changed, so the device would stay invisible
+    # until the user physically unplugged it.
     foreach ($entry in $entries) {
         if (-not $entry.InstanceId) { continue }
-        & pnputil /remove-device $entry.InstanceId 2>&1 | Out-Null
+        & pnputil /restart-device $entry.InstanceId 2>&1 | Out-Null
     }
 
     & pnputil /scan-devices 2>&1 | Out-Null

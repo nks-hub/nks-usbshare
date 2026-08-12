@@ -92,13 +92,46 @@ public sealed class ToolRegistry
             }),
 
         new("share_device",
-            "Offer a local USB device to paired computers.",
-            Schema(("deviceId", "string", "Device id from list_local_devices.", true)),
+            "Offer a local USB device to paired computers. A device the operating system is " +
+            "holding is claimed first, which needs administrator approval and stops it working " +
+            "locally until it is given back.",
+            Schema(
+                ("deviceId", "string", "Device id from list_local_devices.", true),
+                ("claim", "boolean", "Claim the device from its current driver when it is held. False by default.", false)),
             async (arguments, cancellationToken) =>
             {
-                var share = await _node.ShareDeviceAsync(Require(arguments, "deviceId"), cancellationToken);
+                var deviceId = Require(arguments, "deviceId");
+                var devices = await _node.ListLocalDevicesWithSharesAsync(cancellationToken);
+                var device = devices.FirstOrDefault(d => d.Device.DeviceId == deviceId).Device;
+
+                if (device?.ShareBlockedReason is { } blocked)
+                {
+                    if (arguments["claim"]?.GetValue<bool>() != true)
+                        return $"{device.DisplayName} is held by the operating system: {blocked}\n\n" +
+                               "Call this tool again with claim set to true to take it over. " +
+                               "The device stops working on that computer until release_claimed_devices is called.";
+
+                    var claimed = await _node.ClaimForSharingAsync(deviceId, cancellationToken);
+
+                    // The device is re-enumerated after the driver change, so find it again.
+                    devices = await _node.ListLocalDevicesWithSharesAsync(cancellationToken);
+                    var again = devices.FirstOrDefault(d =>
+                        d.Device.HardwareKey == device.HardwareKey && d.Device.SerialNumber == device.SerialNumber);
+
+                    if (again.Device is null || again.Device.ShareBlockedReason is not null)
+                        return $"{claimed}\nThe device is not ready yet; unplug and replug it, then try again.";
+
+                    deviceId = again.Device.DeviceId;
+                }
+
+                var share = await _node.ShareDeviceAsync(deviceId, cancellationToken);
                 return $"'{share.Label}' is now offered to paired computers.";
             }),
+
+        new("release_claimed_devices",
+            "Give every device claimed for sharing back to the driver it had before.",
+            Schema(),
+            async (_, cancellationToken) => await _node.ReleaseClaimedDevicesAsync(cancellationToken)),
 
         new("unshare_device",
             "Stop offering a local USB device.",

@@ -12,4 +12,10 @@
     <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Carried inside the assembly so a published binary can hand a device to WinUSB
+         without anything else being installed alongside it. -->
+    <EmbeddedResource Include="Usb\Windows\bind-winusb.ps1" />
+  </ItemGroup>
+
 </Project>

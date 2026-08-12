@@ -46,13 +46,36 @@ function Assert-Elevated {
 }
 
 function Get-State {
-    if (Test-Path $stateFile) { return @(Get-Content $stateFile -Raw | ConvertFrom-Json) }
-    return @()
+    if (-not (Test-Path $stateFile)) { return @() }
+
+    $text = (Get-Content $stateFile -Raw).Trim()
+    if ($text.Length -eq 0) { return @() }
+
+    try { return @($text | ConvertFrom-Json) } catch { return @() }
 }
 
 function Save-State($entries) {
     New-Item -ItemType Directory -Force -Path $stateDirectory | Out-Null
-    ,@($entries) | ConvertTo-Json -Depth 5 | Set-Content -Path $stateFile -Encoding UTF8
+
+    # Windows PowerShell's ConvertTo-Json wraps an array in {"value":[...],"Count":n}, which does
+    # not read back as a list. Emitting each entry and joining them keeps it a real JSON array.
+    $items = @($entries) | ForEach-Object { $_ | ConvertTo-Json -Depth 5 -Compress }
+    $json = '[' + ($items -join ',') + ']'
+    Set-Content -Path $stateFile -Value $json -Encoding UTF8
+}
+
+# The record of what was claimed can be lost, so the driver store is also searched by provider
+# name. That way a device can always be given back.
+function Find-OrphanPackages {
+    $blocks = (pnputil /enum-drivers 2>&1 | Out-String) -split "`r?`n`r?`n"
+    $found = @()
+
+    foreach ($block in $blocks) {
+        if ($block -notmatch 'NKS UsbShare') { continue }
+        if ($block -match '(oem\d+\.inf)') { $found += $matches[1] }
+    }
+
+    return $found
 }
 
 # Reuses the machine's signing certificate, creating and trusting it on first use.
@@ -210,27 +233,41 @@ function Invoke-Restore {
     Assert-Elevated
 
     $entries = @(Get-State)
-    if ($entries.Count -eq 0) {
-        Write-Host 'No devices are bound.'
+    $packages = @($entries | ForEach-Object { $_.PublishedName } | Where-Object { $_ })
+
+    # Anything left in the driver store under our provider name is ours too, even if the record
+    # of it was lost.
+    foreach ($orphan in Find-OrphanPackages) {
+        if ($packages -notcontains $orphan) { $packages += $orphan }
+    }
+
+    if ($packages.Count -eq 0) {
+        Write-Host 'No devices are claimed.'
+        Save-State @()
         return
     }
 
-    foreach ($entry in $entries) {
-        Write-Host "Restoring $($entry.FriendlyName) ($($entry.HardwareId))..."
+    foreach ($package in $packages) {
+        Write-Host "Removing driver package $package..."
         # /uninstall also reverts every device the package is currently bound to.
-        $output = pnputil /delete-driver $entry.PublishedName /uninstall /force 2>&1 | Out-String
-        Write-Host $output
+        $output = pnputil /delete-driver $package /uninstall /force 2>&1 | Out-String
+        Write-Host $output.Trim()
+    }
 
-        $device = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -eq $entry.InstanceId } | Select-Object -First 1
-        if ($device) {
-            # Re-enumerating makes Windows pick the best remaining driver, which is the class
-            # driver the device came with.
-            & pnputil /remove-device $entry.InstanceId 2>&1 | Out-Null
-            & pnputil /scan-devices 2>&1 | Out-Null
-            Start-Sleep -Seconds 3
-            $service = (Get-PnpDeviceProperty -InstanceId $entry.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data
-            Write-Host "  driver now: $service (was $($entry.OriginalDriver) before sharing)"
-        }
+    # Re-enumerate so Windows picks the best remaining driver, which is the class driver each
+    # device came with.
+    foreach ($entry in $entries) {
+        if (-not $entry.InstanceId) { continue }
+        & pnputil /remove-device $entry.InstanceId 2>&1 | Out-Null
+    }
+
+    & pnputil /scan-devices 2>&1 | Out-Null
+    Start-Sleep -Seconds 4
+
+    foreach ($entry in $entries) {
+        if (-not $entry.InstanceId) { continue }
+        $service = (Get-PnpDeviceProperty -InstanceId $entry.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data
+        Write-Host "  $($entry.FriendlyName): driver now $service (was $($entry.OriginalDriver))"
     }
 
     Save-State @()

@@ -23,6 +23,8 @@
                 <MenuItem Header="Copy pairing _token" Click="OnCopyToken" />
                 <MenuItem Header="Copy key _fingerprint" Click="OnCopyFingerprint" />
                 <Separator />
+                <MenuItem x:Name="GiveBackItem" Header="_Give devices back to Windows…" Click="OnGiveDevicesBack" />
+                <Separator />
                 <MenuItem Header="_Regenerate pairing token…" Click="OnRegenerateToken" />
             </MenuItem>
             <MenuItem Header="_Help">

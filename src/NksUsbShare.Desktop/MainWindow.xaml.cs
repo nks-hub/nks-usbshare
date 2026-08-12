@@ -199,7 +199,12 @@ public partial class MainWindow : Window
     private void OnLocalSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         var row = LocalDeviceList.SelectedItem as LocalDeviceRow;
-        ShareButton.IsEnabled = row is { CanShare: true, IsShared: false };
+
+        // A device Windows is holding can still be shared; it just has to be claimed first, and
+        // the button says so rather than sitting greyed out with no explanation.
+        var claimable = row is { IsShared: false } && (row.CanShare || NodeService.CanClaimHeldDevices);
+        ShareButton.IsEnabled = claimable;
+        ShareButton.Content = row is { CanShare: false, IsShared: false } ? "Claim and share" : "Share device";
         UnshareButton.IsEnabled = row is { IsShared: true };
     }
 
@@ -222,11 +227,73 @@ public partial class MainWindow : Window
     {
         if (LocalDeviceList.SelectedItem is not LocalDeviceRow row) return;
 
+        // Devices held by Windows have to be taken from their driver first. That stops them
+        // working locally, so it is worth saying plainly before it happens.
+        if (!row.CanShare)
+        {
+            var confirmed = MessageBox.Show(this,
+                $"{row.Name} is currently used by Windows itself.\n\n" +
+                "To share it, Windows has to hand it over to its own WinUSB driver. While it is " +
+                "shared the device stops working on this computer: a drive disappears from " +
+                "Explorer, a keyboard stops typing.\n\n" +
+                "You will be asked to approve the change as an administrator. " +
+                "Sharing → Give devices back puts everything as it was.\n\n" +
+                "Hand this device over?",
+                "Share " + row.Name, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+
+            if (confirmed != MessageBoxResult.OK) return;
+
+            await Guard(async () =>
+            {
+                Report($"Handing {row.Name} over to WinUSB…");
+                var message = await _node.ClaimForSharingAsync(row.DeviceId, CancellationToken.None);
+                _node.Log.Info("share", message);
+
+                // Windows re-enumerates the device, so its id can change; find it again by
+                // hardware identity before sharing.
+                await ReloadLocalDevicesAsync();
+                var again = _localDevices.FirstOrDefault(d =>
+                    d.HardwareKey == row.HardwareKey && d.SerialNumber == row.SerialNumber);
+
+                if (again is null or { CanShare: false })
+                {
+                    Report($"{row.Name} was handed over but is not ready yet. Unplug and replug it, then try again.",
+                        isError: true);
+                    return;
+                }
+
+                await _node.ShareDeviceAsync(again.DeviceId, CancellationToken.None);
+                await ReloadLocalDevicesAsync();
+                Report($"{row.Name} is now offered to paired computers.");
+            });
+
+            return;
+        }
+
         await Guard(async () =>
         {
             await _node.ShareDeviceAsync(row.DeviceId, CancellationToken.None);
             await ReloadLocalDevicesAsync();
             Report($"{row.Name} is now offered to paired computers.");
+        });
+    }
+
+    /// <summary>Returns every device claimed for sharing to the driver it had before.</summary>
+    private async void OnGiveDevicesBack(object sender, RoutedEventArgs e)
+    {
+        var confirmed = MessageBox.Show(this,
+            "Give every claimed device back to Windows?\n\n" +
+            "They will stop being shared and start working on this computer again.",
+            "Give devices back", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+
+        if (confirmed != MessageBoxResult.OK) return;
+
+        await Guard(async () =>
+        {
+            Report("Giving devices back…");
+            var message = await _node.ReleaseClaimedDevicesAsync(CancellationToken.None);
+            await ReloadLocalDevicesAsync();
+            Report(message);
         });
     }
 

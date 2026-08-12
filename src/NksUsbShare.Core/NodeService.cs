@@ -102,6 +102,48 @@ public sealed class NodeService : IAsyncDisposable
         return share;
     }
 
+    /// <summary>
+    /// True when a device the operating system is holding could be claimed for sharing on this
+    /// platform, so a user interface knows whether to offer it.
+    /// </summary>
+    public static bool CanClaimHeldDevices => OperatingSystem.IsWindows();
+
+    /// <summary>
+    /// Takes a device away from the driver that currently owns it so it can be forwarded.
+    /// This is what makes sharing work for devices Windows would otherwise keep to itself, and it
+    /// asks for administrator approval because changing a device's driver is an administrative act.
+    /// </summary>
+    public async Task<string> ClaimForSharingAsync(string deviceId, CancellationToken cancellationToken)
+    {
+        var devices = await Backend.EnumerateAsync(cancellationToken).ConfigureAwait(false);
+        var device = devices.FirstOrDefault(d => d.DeviceId == deviceId)
+                     ?? throw new UsbBackendException($"No device with id '{deviceId}' is attached.");
+
+        if (device.ShareBlockedReason is null) return "That device is already available for sharing.";
+
+        if (!OperatingSystem.IsWindows())
+            throw new UsbBackendException(device.ShareBlockedReason);
+
+        var result = await new Usb.Windows.WinUsbBinder(Log).BindAsync(device, cancellationToken).ConfigureAwait(false);
+        if (!result.Success) throw new UsbBackendException(result.Message);
+
+        Changed();
+        return result.Message;
+    }
+
+    /// <summary>Gives every claimed device back to the driver it had before it was shared.</summary>
+    public async Task<string> ReleaseClaimedDevicesAsync(CancellationToken cancellationToken)
+    {
+        if (!OperatingSystem.IsWindows())
+            return "Nothing to give back: devices are only claimed this way on Windows.";
+
+        var result = await new Usb.Windows.WinUsbBinder(Log).RestoreAllAsync(cancellationToken).ConfigureAwait(false);
+        if (!result.Success) throw new UsbBackendException(result.Message);
+
+        Changed();
+        return result.Message;
+    }
+
     public void UnshareDevice(string deviceId)
     {
         var removed = Settings.Shares.RemoveAll(s => s.DeviceId == deviceId);

@@ -27,6 +27,7 @@ try
         "import" => await ImportAsync(),
         "probe" => await ProbeAsync(),
         "attach" => await AttachAsync(),
+        "giveback" => await GiveBackAsync(),
         _ => Unknown(options.Command),
     };
 }
@@ -56,8 +57,10 @@ int Help()
 
         THIS MACHINE
           list                       show local USB devices and what is shared
-          share <index|id>           offer a device to paired clients
+          share <index|id> [--yes]   offer a device to paired clients, claiming it from the
+                                     operating system first when it has to be
           unshare <index|id>         stop offering a device
+          giveback                   return every claimed device to its original driver
           token [--new]              show the pairing token, or generate a fresh one
           info                       identity, ports and fingerprint
 
@@ -176,6 +179,42 @@ async Task<int> SetShareAsync(bool share)
 
     if (share)
     {
+        // A device the operating system is holding has to be claimed before it can be forwarded.
+        if (device.ShareBlockedReason is not null)
+        {
+            if (!NodeService.CanClaimHeldDevices)
+            {
+                Console.Error.WriteLine($"error: {device.ShareBlockedReason}");
+                return 1;
+            }
+
+            Console.WriteLine($"{device.DisplayName} is held by the operating system.");
+            Console.WriteLine("Claiming it stops it working on this computer until it is given back.");
+            Console.WriteLine("You will be asked to approve the change as an administrator.");
+            Console.WriteLine();
+
+            if (!options.Flags.Contains("yes") && !Confirm("Hand this device over?"))
+            {
+                Console.WriteLine("Left alone.");
+                return 0;
+            }
+
+            Console.WriteLine(await node.ClaimForSharingAsync(deviceId, CancellationToken.None));
+
+            // The device is re-enumerated, so find it again by hardware identity.
+            devices = await node.ListLocalDevicesWithSharesAsync(CancellationToken.None);
+            var again = devices.FirstOrDefault(d =>
+                d.Device.HardwareKey == device.HardwareKey && d.Device.SerialNumber == device.SerialNumber);
+
+            if (again.Device is null || again.Device.ShareBlockedReason is not null)
+            {
+                Console.Error.WriteLine("error: the device is not ready yet. Unplug and replug it, then try again.");
+                return 1;
+            }
+
+            deviceId = again.Device.DeviceId;
+        }
+
         await node.ShareDeviceAsync(deviceId, CancellationToken.None);
         Console.WriteLine($"Sharing {device.DisplayName}.");
     }
@@ -186,6 +225,25 @@ async Task<int> SetShareAsync(bool share)
     }
 
     return 0;
+}
+
+async Task<int> GiveBackAsync()
+{
+    var (node, _) = CreateNode(echo: false);
+    await using var _ = node;
+
+    Console.WriteLine(await node.ReleaseClaimedDevicesAsync(CancellationToken.None));
+    return 0;
+}
+
+/// <summary>Asks a yes or no question, defaulting to no when there is no console to ask on.</summary>
+static bool Confirm(string question)
+{
+    if (Console.IsInputRedirected) return false;
+
+    Console.Write($"{question} [y/N] ");
+    var answer = Console.ReadLine();
+    return answer is not null && answer.Trim().StartsWith("y", StringComparison.OrdinalIgnoreCase);
 }
 
 int Token()

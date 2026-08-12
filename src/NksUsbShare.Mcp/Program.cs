@@ -6,7 +6,7 @@ using NksUsbShare.Mcp;
 
 // The Model Context Protocol speaks JSON-RPC over stdio, so nothing may be written to standard
 // output except protocol messages. Diagnostics go to standard error.
-var settings = NodeSettings.LoadOrCreate(Environment.GetEnvironmentVariable("NKS_USBSHARE_HOME"));
+var settings = NodeSettings.LoadOrCreate(NodeSettings.StateDirectoryFromArguments(args));
 var log = new ActivityLog();
 await using var node = new NodeService(settings, log);
 

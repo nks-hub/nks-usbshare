@@ -97,8 +97,15 @@ public sealed class WinUsbBinder(ActivityLog log)
             await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
 
             var output = File.Exists(transcript) ? await File.ReadAllTextAsync(transcript, CancellationToken.None).ConfigureAwait(false) : "";
+
+            // The helper runs elevated in a hidden window, so its transcript is the only account of
+            // what happened to the device. It belongs in the activity log where it can be read,
+            // not at a level the window filters out.
             foreach (var line in output.Split('\n').Where(l => l.Trim().Length > 0))
-                log.Debug("winusb", line.TrimEnd());
+                log.Info("winusb", line.TrimEnd());
+
+            if (output.Trim().Length == 0)
+                log.Warning("winusb", "The elevated helper produced no output at all.");
 
             if (process.ExitCode != 0)
                 return new Result(false, Summarise(output) ?? $"The helper exited with code {process.ExitCode}.");

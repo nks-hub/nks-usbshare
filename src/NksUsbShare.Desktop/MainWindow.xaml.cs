@@ -344,13 +344,8 @@ public partial class MainWindow : Window
     {
         if (LocalDeviceList.SelectedItem is not LocalDeviceRow row) return;
 
-        if (!row.CanShare)
-        {
-            MessageBox.Show(this, row.StatusDetail ?? "This device cannot be shared.",
-                "Device unavailable", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
+        // A device Windows is holding is not a dead end: sharing it is exactly what the claim is
+        // for, so send it down the same road as the button rather than showing a refusal.
         if (row.IsShared) OnUnshareSelected(sender, e);
         else OnShareSelected(sender, e);
     }
@@ -377,7 +372,9 @@ public partial class MainWindow : Window
 
             await Guard(async () =>
             {
-                Report($"Handing {row.Name} over to WinUSB…");
+                // Generating and signing the driver package, installing it and letting Windows
+                // rebuild the device takes a minute or two. Saying so stops it looking stuck.
+                Report($"Handing {row.Name} over to WinUSB — this takes a minute or two. Watch Activity for details.");
                 var message = await _node.ClaimForSharingAsync(row.DeviceId, CancellationToken.None);
                 _node.Log.Info("share", message);
 

@@ -128,8 +128,41 @@ public sealed class NodeService : IAsyncDisposable
         var result = await new Usb.Windows.WinUsbBinder(Log).BindAsync(device, cancellationToken).ConfigureAwait(false);
         if (!result.Success) throw new UsbBackendException(result.Message);
 
+        // Windows tears the device down and builds it back up on the new driver, which takes a few
+        // seconds and happens after the installer has already returned. Looking once, straight
+        // away, reports the old driver and makes a change that worked look like it failed.
+        var claimed = await WaitUntilClaimableAsync(device, cancellationToken).ConfigureAwait(false);
+
         Changed();
+
+        if (claimed is null)
+            throw new UsbBackendException(
+                $"{result.Message}\n\nThe device has not come back on the new driver yet. " +
+                "Unplug it and plug it in again, then share it.");
+
         return result.Message;
+    }
+
+    /// <summary>
+    /// Waits for a device to reappear on its new driver after a claim. It is looked up by hardware
+    /// identity rather than by device id, because the id can change when Windows re-enumerates it.
+    /// Returns the device once it can be shared, or null if it never got there.
+    /// </summary>
+    private async Task<UsbDeviceInfo?> WaitUntilClaimableAsync(UsbDeviceInfo device, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+
+        while (true)
+        {
+            var devices = await Backend.EnumerateAsync(cancellationToken).ConfigureAwait(false);
+            var again = devices.FirstOrDefault(d =>
+                d.HardwareKey == device.HardwareKey && d.SerialNumber == device.SerialNumber);
+
+            if (again is { ShareBlockedReason: null }) return again;
+            if (DateTimeOffset.UtcNow >= deadline) return null;
+
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Gives every claimed device back to the driver it had before it was shared.</summary>
@@ -140,6 +173,21 @@ public sealed class NodeService : IAsyncDisposable
 
         var result = await new Usb.Windows.WinUsbBinder(Log).RestoreAllAsync(cancellationToken).ConfigureAwait(false);
         if (!result.Success) throw new UsbBackendException(result.Message);
+
+        // A device given back to Windows cannot be forwarded any more, so leaving it on the offer
+        // list would advertise something every client would fail to open.
+        var devices = await Backend.EnumerateAsync(cancellationToken).ConfigureAwait(false);
+        var withdrawn = Settings.Shares
+            .Where(share => devices.Any(d => d.DeviceId == share.DeviceId && d.ShareBlockedReason is not null))
+            .ToList();
+
+        foreach (var share in withdrawn)
+        {
+            Settings.Shares.Remove(share);
+            Log.Info("share", $"Stopped offering {share.Label}: it went back to the operating system.");
+        }
+
+        if (withdrawn.Count > 0) Settings.Save();
 
         Changed();
         return result.Message;

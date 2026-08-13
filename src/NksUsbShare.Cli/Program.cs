@@ -785,7 +785,11 @@ async Task<int> AttachAsync()
     using var stopping = CreateShutdownSignal();
 
     var import = await node.ImportDeviceAsync(remote, options.Arguments[1], stopping.Token);
-    var port = options.Flags.Contains("port") ? 3240 : 3240;
+
+    // 3240 is the port a USB/IP controller looks at by default, but another tool may already hold
+    // it — usbipd-win runs a service on exactly that port. `--port 0` takes whatever is free and
+    // tells the controller where to look, which works as long as the controller can be told.
+    var port = options.Number("port", DefaultPorts.LocalController);
     var busId = await node.PublishToLocalControllerAsync(import, port, stopping.Token);
 
     var controller = LocalUsbController.Locate(log);
@@ -892,13 +896,25 @@ static string Truncate(string value, int width)
     => value.Length <= width ? value : value[..(width - 1)] + "…";
 
 /// <summary>Minimal argument parsing: a verb, positional arguments, and --flags.</summary>
-internal sealed record CommandLine(string Command, IReadOnlyList<string> Arguments, IReadOnlySet<string> Flags, string? Home)
+internal sealed record CommandLine(
+    string Command,
+    IReadOnlyList<string> Arguments,
+    IReadOnlySet<string> Flags,
+    IReadOnlyDictionary<string, string> Values,
+    string? Home)
 {
+    /// <summary>Switches that take a value rather than standing on their own.</summary>
+    private static readonly string[] TakesValue = ["home", "port"];
+
+    /// <summary>The value given for a switch, or <paramref name="fallback"/> when it was absent.</summary>
+    public int Number(string name, int fallback)
+        => Values.TryGetValue(name, out var text) && int.TryParse(text, out var value) ? value : fallback;
+
     public static CommandLine Parse(string[] args)
     {
         var positional = new List<string>();
         var flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        string? home = null;
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -910,9 +926,9 @@ internal sealed record CommandLine(string Command, IReadOnlyList<string> Argumen
             }
 
             var name = argument.TrimStart('-');
-            if (name.Equals("home", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            if (TakesValue.Contains(name, StringComparer.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
-                home = args[++i];
+                values[name] = args[++i];
                 continue;
             }
 
@@ -923,7 +939,9 @@ internal sealed record CommandLine(string Command, IReadOnlyList<string> Argumen
         if (flags.Contains("help") || flags.Contains("h")) command = "help";
         if (flags.Contains("version")) command = "version";
 
-        return new CommandLine(command.ToLowerInvariant(), positional.Skip(1).ToArray(), flags, home);
+        values.TryGetValue("home", out var home);
+
+        return new CommandLine(command.ToLowerInvariant(), positional.Skip(1).ToArray(), flags, values, home);
     }
 }
 

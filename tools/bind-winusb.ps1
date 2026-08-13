@@ -204,6 +204,16 @@ function Invoke-Bind {
     Start-Sleep -Seconds 2
     $newService = (Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data
 
+    # Installing the package does not always move a device that is busy serving its class driver.
+    # Restarting the node makes Windows pick the driver again, which is what a replug would do by
+    # hand, and it keeps the device in the tree.
+    if ($newService -ne 'WinUSB') {
+        Write-Host "Still on '$newService' - restarting the device so Windows picks the new driver..."
+        & pnputil /restart-device $device.InstanceId 2>&1 | Out-String | Write-Host
+        Start-Sleep -Seconds 3
+        $newService = (Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data
+    }
+
     $entries = @(Get-State | Where-Object { $_.HardwareId -ne $HardwareId })
     $entries += [pscustomobject]@{
         HardwareId     = $HardwareId
@@ -247,6 +257,16 @@ function Invoke-Restore {
         return
     }
 
+    # The hub each device hangs off has to be noted BEFORE the package goes: uninstalling a driver
+    # package takes the device node out of the tree, and once it is gone there is nothing left to
+    # ask who its parent was.
+    $parents = @{}
+    foreach ($entry in $entries) {
+        if (-not $entry.InstanceId) { continue }
+        $parent = (Get-PnpDeviceProperty -InstanceId $entry.InstanceId -KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue).Data
+        if ($parent) { $parents[$entry.InstanceId] = $parent }
+    }
+
     foreach ($package in $packages) {
         Write-Host "Removing driver package $package..."
         # /uninstall also reverts every device the package is currently bound to.
@@ -254,26 +274,41 @@ function Invoke-Restore {
         Write-Host $output.Trim()
     }
 
-    # Restart each device so Windows re-picks the best remaining driver, which is the class driver
-    # it came with. This must be /restart-device: /remove-device tears the node out of the tree and
-    # a USB hub will not re-report a port that never changed, so the device would stay invisible
-    # until the user physically unplugged it.
-    foreach ($entry in $entries) {
-        if (-not $entry.InstanceId) { continue }
-        & pnputil /restart-device $entry.InstanceId 2>&1 | Out-Null
-    }
-
     & pnputil /scan-devices 2>&1 | Out-Null
     Start-Sleep -Seconds 4
 
     foreach ($entry in $entries) {
         if (-not $entry.InstanceId) { continue }
+
+        # Uninstalling the package removes the device node. A USB hub only reports a port when
+        # something changes on it, so nothing brings the device back on its own and it stays
+        # invisible until it is physically unplugged. Restarting the hub is the replug, done in
+        # software: it makes the hub enumerate its ports again and the device returns on its
+        # original driver.
+        if (-not (Test-DevicePresent $entry.InstanceId)) {
+            $parent = $parents[$entry.InstanceId]
+            if ($parent) {
+                Write-Host "  $($entry.FriendlyName): gone from the device tree, restarting its hub..."
+                & pnputil /restart-device "$parent" 2>&1 | Out-Null
+                Start-Sleep -Seconds 5
+            }
+        }
+
         $service = (Get-PnpDeviceProperty -InstanceId $entry.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data
-        Write-Host "  $($entry.FriendlyName): driver now $service (was $($entry.OriginalDriver))"
+        if ($service) {
+            Write-Host "  $($entry.FriendlyName): driver now $service (was $($entry.OriginalDriver))"
+        } else {
+            Write-Host "  $($entry.FriendlyName): did not come back; unplug it and plug it in again." -ForegroundColor Yellow
+        }
     }
 
     Save-State @()
     Write-Host 'Done.' -ForegroundColor Green
+}
+
+function Test-DevicePresent {
+    param([string]$instanceId)
+    return [bool](Get-PnpDevice -InstanceId $instanceId -ErrorAction SilentlyContinue)
 }
 
 function Invoke-Status {

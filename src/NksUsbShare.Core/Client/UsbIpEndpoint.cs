@@ -93,8 +93,7 @@ public sealed class UsbIpEndpoint : IAsyncDisposable
         if (_listener is not null) return Task.CompletedTask;
 
         // Loopback only. This side of the link is deliberately not reachable from the network.
-        _listener = new TcpListener(IPAddress.Loopback, port);
-        _listener.Start();
+        _listener = Listen(port);
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
 
         _shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -102,6 +101,31 @@ public sealed class UsbIpEndpoint : IAsyncDisposable
 
         _log.Info("usbip", $"Local controller endpoint listening on 127.0.0.1:{Port}.");
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Binds the loopback endpoint, falling back to any free port when the usual one is taken.
+    /// 3240 is where a USB/IP controller looks by default, but another tool may already own it —
+    /// usbipd-win runs a service on exactly that port. The controller is told which port to use
+    /// when it is asked to attach, so any port works; refusing to start would be a needless
+    /// failure on a machine that has both tools installed.
+    /// </summary>
+    private TcpListener Listen(int port)
+    {
+        try
+        {
+            var listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            return listener;
+        }
+        catch (SocketException ex) when (port != 0 &&
+            ex.SocketErrorCode is SocketError.AddressAlreadyInUse or SocketError.AccessDenied)
+        {
+            _log.Warning("usbip", $"Port {port} is taken by another program; using a free one instead.");
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            return listener;
+        }
     }
 
     private async Task AcceptLoopAsync(CancellationToken cancellationToken)

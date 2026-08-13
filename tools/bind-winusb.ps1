@@ -106,6 +106,100 @@ function Get-SigningCertificate {
     return $certificate
 }
 
+# Turns a hub port off and on again, which is a replug without anyone reaching for the cable.
+# Windows often records a new driver for a device but leaves the old stack standing until the
+# device disappears and comes back; a phone keeps the interface nodes its vendor driver created
+# and nothing can open it. pnputil's restart, a hub restart and disable/enable all refuse while
+# the machine has a pending reboot, but a port cycle is a hardware event and goes through anyway.
+function Invoke-PortCycle {
+    param([string]$instanceId)
+
+    $parent = (Get-PnpDeviceProperty -InstanceId $instanceId -KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue).Data
+    $port = (Get-PnpDeviceProperty -InstanceId $instanceId -KeyName 'DEVPKEY_Device_Address' -ErrorAction SilentlyContinue).Data
+    if (-not $parent -or -not $port) { return 'the hub or port could not be worked out' }
+
+    # The hub is reached through its device interface path, which is the instance id lowercased
+    # with backslashes turned into hashes, plus the USB hub interface class.
+    $hubPath = '\\?\' + $parent.ToLowerInvariant().Replace('\', '#') + '#{f18a0e88-c30c-11d0-8815-00a0c906bed8}'
+
+    # The whole call lives in C#. Done from PowerShell the access mask 0xC0000000 is read as a
+    # negative number and will not convert to the unsigned parameter.
+    if (-not ('Nks.PortCycle' -as [type])) {
+        Add-Type -Namespace Nks -Name PortCycle -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)]
+public struct CyclePort { public uint ConnectionIndex; public uint StatusReturned; }
+
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+private static extern IntPtr CreateFileW(string path, uint access, uint share, IntPtr security,
+    uint disposition, uint flags, IntPtr template);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+private static extern bool DeviceIoControl(IntPtr device, uint code, ref CyclePort input, int inputSize,
+    ref CyclePort output, int outputSize, out int returned, IntPtr overlapped);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+private static extern bool CloseHandle(IntPtr handle);
+
+public static string Cycle(string hubPath, uint port)
+{
+    const uint readWrite = 0xC0000000, shareReadWrite = 3, openExisting = 3;
+    const uint IOCTL_USB_HUB_CYCLE_PORT = 0x220444;
+
+    IntPtr hub = CreateFileW(hubPath, readWrite, shareReadWrite, IntPtr.Zero, openExisting, 0, IntPtr.Zero);
+    if (hub == new IntPtr(-1))
+        return "the hub could not be opened (Win32 " + Marshal.GetLastWin32Error() + ")";
+
+    try
+    {
+        var input = new CyclePort { ConnectionIndex = port };
+        var output = new CyclePort();
+        int returned;
+        int size = Marshal.SizeOf(typeof(CyclePort));
+
+        if (!DeviceIoControl(hub, IOCTL_USB_HUB_CYCLE_PORT, ref input, size, ref output, size, out returned, IntPtr.Zero))
+            return "the port could not be cycled (Win32 " + Marshal.GetLastWin32Error() + ")";
+
+        return "port " + port + " cycled";
+    }
+    finally { CloseHandle(hub); }
+}
+'@
+    }
+
+    return [Nks.PortCycle]::Cycle($hubPath, [uint32]$port)
+}
+
+# Installs a driver package on every device matching a hardware id, ignoring which driver Windows
+# would otherwise consider better. This is the same call the well-known driver-swapping tools make;
+# it lives in newdev.dll, which ships with Windows.
+function Invoke-ForceInstall {
+    param([string]$infPath, [string]$hardwareId)
+
+    if (-not ('Nks.NewDev' -as [type])) {
+        Add-Type -Namespace Nks -Name NewDev -MemberDefinition @'
+[DllImport("newdev.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern bool UpdateDriverForPlugAndPlayDevicesW(
+    IntPtr parent, string hardwareId, string infPath, uint flags, out bool rebootNeeded);
+'@
+    }
+
+    $reboot = $false
+    $installFlagForce = 1
+    $ok = [Nks.NewDev]::UpdateDriverForPlugAndPlayDevicesW(
+        [IntPtr]::Zero, $hardwareId, $infPath, $installFlagForce, [ref]$reboot)
+
+    if (-not $ok) {
+        $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        # 0xE000020B / ERROR_NO_SUCH_DEVINST means nothing matched, which the caller reports on
+        # its own by checking the driver afterwards.
+        return "the forced install did not take (Win32 $code)"
+    }
+
+    # Windows PowerShell 5.1 runs this script, so no ternary operator.
+    if ($reboot) { return 'forced; Windows wants a reboot to finish' }
+    return 'forced'
+}
+
 function New-DriverPackage($hardwareId, $description) {
     $work = Join-Path $env:TEMP ('nksusb-inf-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -231,6 +325,30 @@ function Invoke-Bind {
         $newService = (Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data
     }
 
+    # A vendor driver that is WHQL signed outranks this package whatever its INF says, because
+    # Windows weighs the signature before it weighs how specifically the hardware id matched. A
+    # phone with its manufacturer's driver installed therefore stays where it is. Forcing the
+    # choice is a documented Windows call rather than a trick: UpdateDriverForPlugAndPlayDevices
+    # with INSTALLFLAG_FORCE installs the named package on the device and skips the ranking.
+    if ($newService -ne 'WinUSB') {
+        Write-Host "Still on '$newService' - forcing the driver onto the device..."
+        $forced = Invoke-ForceInstall -infPath $package.Inf -hardwareId $HardwareId
+        Write-Host "  $forced"
+        Start-Sleep -Seconds 3
+        $newService = (Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data
+    }
+
+    # Windows can record the new driver and still leave the old stack standing: a composite device
+    # keeps the interface nodes its vendor driver created, and while those hold the interfaces
+    # nothing can open the device. The port cycle below is the replug that clears them.
+    $leftovers = @((Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Children' -ErrorAction SilentlyContinue).Data)
+    if ($newService -ne 'WinUSB' -or $leftovers.Count -gt 0) {
+        Write-Host 'Cycling the hub port so the device comes back on its new driver...'
+        Write-Host "  $(Invoke-PortCycle -instanceId $device.InstanceId)"
+        Start-Sleep -Seconds 6
+        $newService = (Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data
+    }
+
     $entries = @(Get-State | Where-Object { $_.HardwareId -ne $HardwareId })
     $entries += [pscustomobject]@{
         HardwareId     = $HardwareId
@@ -249,10 +367,18 @@ function Invoke-Bind {
     Write-Host ''
     Write-Host "Published as:    $published"
     Write-Host "Driver now:      $newService"
+
+    # Steps along the way are allowed to fail: pnputil refuses to restart a device while the
+    # machine has work pending and answers 3010 for "done, but a reboot would finish it". Those
+    # leave a non-zero code behind that would otherwise be read as the whole operation failing.
+    # What counts is the driver the device ended up on.
+    $global:LASTEXITCODE = 0
+
     if ($newService -eq 'WinUSB') {
         Write-Host 'The device is ready to be shared.' -ForegroundColor Green
     } else {
         Write-Host "The package installed but the device still reports '$newService'. Unplug and replug it." -ForegroundColor Yellow
+        exit 1
     }
 }
 

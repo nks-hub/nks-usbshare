@@ -35,6 +35,12 @@ try
         "attach" => await AttachAsync(),
         "storage" => await StorageAsync(),
         "giveback" => await GiveBackAsync(),
+
+        // Not in the help: this is how the application re-runs itself with administrator rights
+        // to change a driver. Nobody types it.
+        "__winusb-bind" or "__winusb-restore" when OperatingSystem.IsWindows() =>
+            NksUsbShare.Core.Usb.Windows.WinUsbHelper.Run(options.Command, options.Arguments,
+                options.Values.GetValueOrDefault("log")),
         _ => Unknown(options.Command),
     };
 }
@@ -904,7 +910,7 @@ internal sealed record CommandLine(
     string? Home)
 {
     /// <summary>Switches that take a value rather than standing on their own.</summary>
-    private static readonly string[] TakesValue = ["home", "port"];
+    private static readonly string[] TakesValue = ["home", "port", "log"];
 
     /// <summary>The value given for a switch, or <paramref name="fallback"/> when it was absent.</summary>
     public int Number(string name, int fallback)

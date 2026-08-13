@@ -120,49 +120,57 @@ internal static class DriverNative
 
     // ---- wintrust: building the catalog ----
 
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     internal static extern IntPtr CryptCATOpen(string fileName, uint openFlags, IntPtr cryptProvider,
         uint publicVersion, uint encodingType);
 
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     internal static extern IntPtr CryptCATPutMemberInfo(IntPtr catalog, string? fileName, string referenceTag,
         ref Guid subject, uint certVersion, uint indirectDataSize, IntPtr indirectData);
 
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     internal static extern IntPtr CryptCATPutAttrInfo(IntPtr catalog, IntPtr member, string referenceTag,
         uint attributeFlags, uint valueSize, IntPtr value);
 
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     internal static extern IntPtr CryptCATPutCatAttrInfo(IntPtr catalog, string referenceTag,
         uint attributeFlags, uint valueSize, IntPtr value);
 
-    [DllImport("wintrust.dll", SetLastError = true)]
+    [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = true)]
     internal static extern bool CryptCATPersistStore(IntPtr catalog);
 
-    [DllImport("wintrust.dll", SetLastError = true)]
+    [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = true)]
     internal static extern bool CryptCATClose(IntPtr catalog);
 
     internal const uint CryptcatOpenCreatenew = 0x00000001;
-    internal const uint CryptcatVersion1 = 0x00000100;
 
+    /// <summary>CRYPTCAT_VERSION_2 — the version that records SHA-256 hashes.</summary>
+    internal const uint CryptcatVersion2 = 0x00000200;
+
+    // The attribute flags split into two groups: how the name is given (the low bits) and how the
+    // value is given (the 0x000n0000 bits). Mixing them up is rewarded with ERROR_INVALID_PARAMETER.
     internal const uint CryptcatAttrNameascii = 0x00000001;
-    internal const uint CryptcatAttrDataascii = 0x00000002;
+    internal const uint CryptcatAttrDataascii = 0x00010000;
     internal const uint CryptcatAttrAuthenticated = 0x10000000;
 
-    // ---- wintrust: hashing a file the way a catalog records it ----
+    // ---- crypt32: hashing a file the way a catalog records it ----
+    //
+    // The subject-interface-package calls live in crypt32, not wintrust, even though everything
+    // else about catalogs is in wintrust.
 
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("crypt32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     internal static extern bool CryptSIPRetrieveSubjectGuid(string fileName, IntPtr fileHandle, out Guid subject);
 
-    [DllImport("wintrust.dll", SetLastError = true)]
+    [DllImport("crypt32.dll", ExactSpelling = true, SetLastError = true)]
     internal static extern bool CryptSIPLoad(ref Guid subject, uint flags, ref SipDispatchInfo dispatch);
 
+    // SIP_DISPATCH_INFO from mssip.h. The field order is what makes the function pointers land in
+    // the right place, so it follows the header exactly.
     [StructLayout(LayoutKind.Sequential)]
     internal struct SipDispatchInfo
     {
         public uint Size;
-        public uint Version;
-        public IntPtr EventHandle;
+        public IntPtr Sip;
         public IntPtr GetSignedDataMsg;
         public IntPtr PutSignedDataMsg;
         public IntPtr CreateIndirectData;
@@ -170,30 +178,112 @@ internal static class DriverNative
         public IntPtr RemoveSignedDataMsg;
     }
 
+    /// <summary>CRYPT_ALGORITHM_IDENTIFIER, held inline inside SIP_SUBJECTINFO.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CryptAlgorithmIdentifier
+    {
+        public IntPtr ObjectId;      // LPSTR
+        public uint ParametersSize;
+        public IntPtr Parameters;
+    }
+
+    // SIP_SUBJECTINFO from mssip.h.
     [StructLayout(LayoutKind.Sequential)]
     internal struct SipSubjectInfo
     {
         public uint Size;
-        public IntPtr SubjectGuid;
-        public uint DisplayInfoFlags;
-        public IntPtr MemoryHandle;
-        public IntPtr FileName;
-        public IntPtr FileHandle;
-        public IntPtr Reserved;
-        public uint Index;
-        public uint Reserved2;
-        public IntPtr Reserved3;
-        public IntPtr DigestAlgorithm;
-        public uint Flags;
-        public uint Reserved4;
-        public IntPtr Reserved5;
-        public IntPtr Reserved6;
-        public IntPtr Reserved7;
+        public IntPtr SubjectType;     // GUID*
+        public IntPtr File;            // HANDLE
+        public IntPtr FileName;        // LPCWSTR
+        public IntPtr DisplayName;     // LPCWSTR
+        public uint Reserved1;
+        public uint IntVersion;
         public IntPtr CryptProvider;
-        public IntPtr Reserved8;
-        public IntPtr Reserved9;
+        public CryptAlgorithmIdentifier DigestAlgorithm;
+        public uint Flags;
+        public uint EncodingType;
+        public uint Reserved2;
+        public uint CapiSettings;
+        public uint SecuritySettings;
+        public uint Index;
+        public uint UnionChoice;
+        public IntPtr Union;
+        public IntPtr ClientData;
     }
+
+    internal const uint X509AsnEncoding = 0x00000001;
+    internal const uint Pkcs7AsnEncoding = 0x00010000;
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate bool CryptSipCreateIndirectData(ref SipSubjectInfo subject, ref uint dataSize, IntPtr data);
+
+    // ---- mssign32: signing the catalog ----
+    //
+    // .NET can build a PKCS#7 signature, but only through a NuGet package, and this project has
+    // none. SignerSignEx is the Windows call signtool itself makes, so the signature is produced
+    // by the operating system with nothing added to the build.
+
+    [DllImport("mssign32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    internal static extern int SignerSignEx(uint flags, ref SignerSubjectInfo subjectInfo,
+        ref SignerCert signerCert, ref SignerSignatureInfo signatureInfo, IntPtr providerInfo,
+        string? timestampUrl, IntPtr request, IntPtr sipData, out IntPtr context);
+
+    [DllImport("mssign32.dll", ExactSpelling = true, SetLastError = true)]
+    internal static extern int SignerFreeSignerContext(IntPtr context);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SignerFileInfo
+    {
+        public uint Size;
+        public IntPtr FileName;
+        public IntPtr File;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SignerSubjectInfo
+    {
+        public uint Size;
+        public IntPtr Index;
+        public uint SubjectChoice;
+        public IntPtr SubjectInfo;   // SIGNER_FILE_INFO*
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SignerCertStoreInfo
+    {
+        public uint Size;
+        public IntPtr SigningCert;   // PCCERT_CONTEXT
+        public uint CertPolicy;
+        public IntPtr CertStore;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SignerCert
+    {
+        public uint Size;
+        public uint CertChoice;
+        public IntPtr CertInfo;      // SIGNER_CERT_STORE_INFO*
+        public IntPtr Window;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SignerSignatureInfo
+    {
+        public uint Size;
+        public uint AlgidHash;
+        public uint AttrChoice;
+        public IntPtr AttrAuthcode;
+        public IntPtr AuthenticatedAttributes;
+        public IntPtr UnauthenticatedAttributes;
+    }
+
+    internal const uint SignerSubjectFile = 0x01;
+    internal const uint SignerCertStore = 0x02;
+    internal const uint SignerNoAttr = 0x00;
+
+    /// <summary>Use the certificate as given rather than rebuilding its chain.</summary>
+    internal const uint CertPolicyStore = 0x00000002;
+
+    /// <summary>CALG_SHA_256.</summary>
+    internal const uint CalgSha256 = 0x0000800c;
 }

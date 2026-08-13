@@ -46,9 +46,6 @@ public sealed class WinUsbBinder(ActivityLog log)
         return RunAsync(["-Restore"], cancellationToken);
     }
 
-    /// <summary>Devices this tool currently holds, as reported by the script's own record.</summary>
-    public Task<Result> StatusAsync(CancellationToken cancellationToken) => RunAsync(["-Status"], cancellationToken);
-
     /// <summary>
     /// Builds the hardware id Windows matches on. The device instance id has the form
     /// <c>USB\VID_xxxx&amp;PID_xxxx\serial</c>; the middle section is what an INF matches.

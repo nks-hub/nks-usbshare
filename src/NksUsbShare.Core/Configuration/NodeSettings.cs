@@ -10,9 +10,6 @@ public static class DefaultPorts
     /// <summary>Where the host listens for encrypted device traffic.</summary>
     public const int Link = 57340;
 
-    /// <summary>Where the local web interface is served. Bound to loopback unless told otherwise.</summary>
-    public const int WebUi = 57341;
-
     /// <summary>
     /// Where imported devices are offered to this machine's own virtual USB host controller.
     /// Bound to loopback only; 3240 is the port such controllers look for by convention.
@@ -74,13 +71,9 @@ public sealed class NodeSettings
     public string HostName { get; set; } = Environment.MachineName;
 
     public int LinkPort { get; set; } = DefaultPorts.Link;
-    public int WebUiPort { get; set; } = DefaultPorts.WebUi;
 
     /// <summary>Bind address for the link listener. 0.0.0.0 exposes it to the network.</summary>
     public string LinkBindAddress { get; set; } = "0.0.0.0";
-
-    /// <summary>Bind address for the web interface. Loopback keeps the control plane local.</summary>
-    public string WebUiBindAddress { get; set; } = "127.0.0.1";
 
     /// <summary>Presented by clients after the TLS handshake. Regenerated on first run.</summary>
     public string PairingToken { get; set; } = "";

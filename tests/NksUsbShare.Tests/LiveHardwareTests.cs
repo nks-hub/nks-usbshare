@@ -88,5 +88,36 @@ public static class LiveHardwareTests
                 async () => await backend.OpenAsync("no-such-device-id", CancellationToken.None),
                 "opening a bogus device id");
         });
+
+        // The claim on Windows reads the device tree directly rather than shelling out. This
+        // checks that reading against real hardware answers the questions the claim depends on.
+        TestRunner.Add(suite, "the device tree answers what a claim needs to know", async () =>
+        {
+            if (!OperatingSystem.IsWindows()) Assert.Skip("the device tree is read this way only on Windows");
+
+            var backend = UsbBackend.Create();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var devices = await backend.EnumerateAsync(timeout.Token);
+
+            var usb = devices.FirstOrDefault(d => d.DeviceId.StartsWith(@"USB\", StringComparison.OrdinalIgnoreCase));
+            if (usb is null) Assert.Skip("no USB device is attached to this machine");
+
+            var node = NksUsbShare.Core.Usb.Windows.DeviceNode.Open(usb!.DeviceId);
+            Assert.NotNull(node, $"the device tree knows {usb.DeviceId}");
+
+            Assert.True(node!.Service is { Length: > 0 }, $"it reports a driver ({node.Service})");
+            Assert.True(node.HardwareIds.Count > 0, "and its hardware ids");
+            Assert.NotNull(node.Parent(), "and the hub it hangs off");
+            Assert.True(node.HubPort is not null, $"and the port it sits on ({node.HubPort})");
+
+            Console.WriteLine($"          {usb.DisplayName}: driver {node.Service}, hub port {node.HubPort}");
+
+            // Looking a device up by hardware id is how the claim finds it again after Windows
+            // re-enumerates it, so it has to find the same node.
+            var hardwareId = string.Join('\\', usb.DeviceId.Split('\\').Take(2));
+            var found = NksUsbShare.Core.Usb.Windows.DeviceNode.FindByHardwareId(hardwareId);
+            Assert.NotNull(found, $"searching by hardware id {hardwareId} finds it");
+            Assert.Equal(usb.DeviceId.ToLowerInvariant(), found!.InstanceId.ToLowerInvariant(), "the same device");
+        });
     }
 }

@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag (e.g. v1.1.0) to attach artifacts to. Required for workflow_dispatch."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.project }} / ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The command line and the management server run everywhere.
+          - { os: windows-latest, rid: win-x64,   project: NksUsbShare.Cli,     archive: zip }
+          - { os: windows-latest, rid: win-x64,   project: NksUsbShare.Mcp,     archive: zip }
+          - { os: ubuntu-latest,  rid: linux-x64, project: NksUsbShare.Cli,     archive: tar.gz }
+          - { os: ubuntu-latest,  rid: linux-x64, project: NksUsbShare.Mcp,     archive: tar.gz }
+          - { os: macos-latest,   rid: osx-arm64, project: NksUsbShare.Cli,     archive: tar.gz }
+          - { os: macos-latest,   rid: osx-arm64, project: NksUsbShare.Mcp,     archive: tar.gz }
+          # Each window is native, so each one is built on its own platform.
+          - { os: windows-latest, rid: win-x64,   project: NksUsbShare.Desktop, archive: zip }
+          - { os: ubuntu-latest,  rid: linux-x64, project: NksUsbShare.Gtk,     archive: tar.gz }
+          - { os: macos-latest,   rid: osx-arm64, project: NksUsbShare.Mac,     archive: tar.gz }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Publish
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "Stamping version: $VERSION"
+          dotnet publish src/${{ matrix.project }} \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:Version="$VERSION" \
+            -o publish/${{ matrix.project }}-${{ matrix.rid }}
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path "publish/${{ matrix.project }}-${{ matrix.rid }}/*" -DestinationPath "${{ matrix.project }}-${{ matrix.rid }}.zip"
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          cd publish/${{ matrix.project }}-${{ matrix.rid }}
+          tar -czvf ../../${{ matrix.project }}-${{ matrix.rid }}.tar.gz .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.project }}-${{ matrix.rid }}
+          path: ${{ matrix.project }}-${{ matrix.rid }}.*
+          retention-days: 14
+
+  release:
+    name: Create GitHub Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten
+        run: |
+          mkdir -p release
+          find dist -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec cp -v {} release/ \;
+          ls -la release/
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: NKS UsbShare ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: release/*
+          draft: false
+          prerelease: false

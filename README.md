@@ -1,11 +1,27 @@
-# NKS UsbShare
+[![CI](https://github.com/lukyrys/nks-usbshare/actions/workflows/ci.yml/badge.svg)](https://github.com/lukyrys/nks-usbshare/actions/workflows/ci.yml)
+[![Release](https://github.com/lukyrys/nks-usbshare/actions/workflows/release.yml/badge.svg)](https://github.com/lukyrys/nks-usbshare/actions/workflows/release.yml)
+[![.NET](https://img.shields.io/badge/.NET-9.0-512BD4)](https://dotnet.microsoft.com/)
+[![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](#no-dependencies)
+
+# NKS UsbShare v1.0.0
 
 Share USB devices between computers over an encrypted TCP link — on a LAN, across a VPN, or over
 the internet. The device plugged into one machine becomes usable from another.
 
 Written in C# on .NET 9 with **no third-party dependencies**. Everything it uses ships with the
 operating system or with .NET itself: WinUSB and SetupAPI on Windows, usbfs on Linux, IOKit on
-macOS, WPF for the Windows interface, and the .NET TLS stack for the transport.
+macOS, WPF, AppKit and GTK for the windows, and the .NET TLS stack for the transport.
+
+## Screenshots
+
+| Windows | Linux |
+|---|---|
+| ![Windows](docs/screenshots/windows.png) | ![Linux](docs/screenshots/linux.png) |
+
+Every window shows the same thing in the same shape: identity and pairing details pinned at the
+top, then a table of devices with a button per row, then the computers allowed in.
+
+![Settings](docs/screenshots/windows-settings.png)
 
 ## What works today
 
@@ -13,22 +29,24 @@ macOS, WPF for the Windows interface, and the .NET TLS stack for the transport.
 |---|---|---|---|
 | Enumerate local USB devices | verified | verified | verified |
 | Share a device (export) | verified | verified | implemented |
+| Claim a device from its class driver | verified | n/a | n/a |
 | Use a remote device from an application | verified | verified | verified |
 | Present a remote device to the whole OS | verified | verified | not possible today |
-| Native application window | WPF, verified | planned (GTK) | AppKit, window verified |
+| Native application window | WPF, verified | GTK, verified | AppKit, verified |
 | Command line | verified | verified | verified |
+| Per-device access lists and blocking | verified | verified | implemented |
 
 "Verified" means it was exercised against real hardware; "implemented" means the code is complete
 but has not yet been run on that platform.
 
 The Windows export path was checked end to end: a USB flash drive plugged into one machine was
-rebound to WinUSB with `tools/bind-winusb.ps1`, shared, and then read from a Windows 11 virtual
-machine on another host across a VPN. The virtual machine pulled the device and configuration
-descriptors straight off the hardware — mass storage, class 08/06/50, two 512 byte bulk endpoints
-— proving real transfers cross the encrypted link rather than cached metadata.
+claimed from its class driver, shared, and then read from a Windows 11 virtual machine on another
+host across a VPN. The virtual machine pulled the device and configuration descriptors straight off
+the hardware — mass storage, class 08/06/50, two 512 byte bulk endpoints — proving real transfers
+cross the encrypted link rather than cached metadata.
 
 ```
-nksusb probe 10.0.0.7 'USB\VID_FFFF&PID_5678\9207014AB5258217200'
+nksusb probe 192.0.2.10 'USB\VID_FFFF&PID_5678\0123456789ABC'
 
   Disk 2.0  (ffff:5678)
   device descriptor (18 bytes)
@@ -46,28 +64,17 @@ its ordinary mass storage driver, and mounted the filesystem as a removable driv
 from the virtual machine landed on the physical device, and a two megabyte round trip came back
 byte for byte identical.
 
-```
-Port 01: device in use at High Speed(480Mbps)
-         unknown vendor : unknown product (ffff:5678)
-           -> usbip://127.0.0.1:3240/1-1
-
-Number FriendlyName       BusType   GB   Status
-     2 Generic Flash Disk USB     14.9   Online
-
-DriveLetter FileSystemLabel FileSystem   GB
-          G 20250512-PL     FAT32      14.9
-```
-
-## How it fits together
+## Architecture
 
 ```
    machine A (host)                              machine B (client)
-   ┌───────────────────────┐                     ┌───────────────────────┐
-   │ USB device            │                     │ application           │
-   │   ↓ WinUSB / usbfs    │                     │   ↑ RemoteUsbDevice   │
-   │ NodeService           │  TLS 1.3, port      │ NodeService           │
-   │   HostServer  ────────┼─────  57340  ───────┼──→ UsbShareClient     │
-   └───────────────────────┘                     └───────────────────────┘
+   +-----------------------+                     +-----------------------+
+   | USB device            |                     | application           |
+   |   |  WinUSB / usbfs   |                     |   ^  RemoteUsbDevice  |
+   |   v                   |   TLS 1.3, port     |   |                   |
+   | NodeService           |                     | NodeService           |
+   |   HostServer  --------+------  57340  ------+-> UsbShareClient      |
+   +-----------------------+                     +-----------------------+
 ```
 
 Transfers cross the link as URBs: the client submits a request describing an endpoint, a transfer
@@ -75,63 +82,69 @@ type and a payload; the host issues it through the operating system and sends ba
 Control, bulk and interrupt transfers are carried; isochronous is carried by the protocol and
 implemented on the Linux backend.
 
+### Components
+
+| Component | Runtime | Description |
+|-----------|---------|-------------|
+| **NksUsbShare.Core** | .NET 9 | Wire protocol, TLS, USB backends, host and client engines |
+| **NksUsbShare.Cli** | .NET 9 | `nksusb` — the whole feature set from a terminal, all platforms |
+| **NksUsbShare.Desktop** | .NET 9 (WPF) | Windows application |
+| **NksUsbShare.Gtk** | .NET 9 (GTK 3) | Linux application, plain P/Invoke |
+| **NksUsbShare.Mac** | .NET 9 (AppKit) | macOS application, on the Objective-C runtime |
+| **NksUsbShare.Mcp** | .NET 9 | Management server speaking the Model Context Protocol |
+
 ### Security
 
-- **TLS 1.3** on every connection, before a single protocol byte is exchanged.
-- **Public-key pinning.** Each node generates a self-signed P-384 certificate on first run. A
-  client pins the host's key fingerprint the first time it connects and refuses to continue if it
-  ever changes. There is no certificate authority, because there is no third party in the link.
-- **Pairing tokens.** 125 bits of entropy, compared in constant time, shown in groups of five
-  characters with the ambiguous ones removed so they can be read aloud.
+| Layer | Technology | Scope |
+|-------|-----------|-------|
+| Transport | TLS 1.3 (TLS 1.2 floor) | Every connection, before a single protocol byte |
+| Host identity | Self-signed P-384, pinned on first use | Client refuses a host whose key changed |
+| Client identity | Self-signed P-384, always presented | Host names, blocks and restricts by key |
+| Admission | 125-bit pairing token, constant-time compare | Every connection |
+| Per device | Allow list of client fingerprints | Listing and opening |
+
+- **Public-key pinning.** Each node generates its certificate on first run. A client pins the
+  host's fingerprint the first time it connects and refuses to continue if it ever changes. There
+  is no certificate authority, because there is no third party in the link.
+- **Pairing tokens.** 125 bits of entropy, shown in groups of five characters with the ambiguous
+  ones removed so they can be read aloud.
 - **Every client is named.** A client always presents its own key, so the host records which
   computers have used it and can tell them apart. Nothing has to be turned on for this.
-- **Per-device access control.** A share can be restricted to named computers; the default is any
-  client that knows the pairing token.
 - **Blocking.** A computer can be refused outright. It is disconnected at once and anything it was
   holding is released, so blocking does not wait for it to come back.
 - **Optional mutual TLS**, where a client must present a key the host already knows before the
   handshake completes at all.
 
-## Using it
+## Quick start
 
 ### Desktop application
 
-**Windows** — `dotnet build src/NksUsbShare.Desktop`, then run `NksUsbShare.exe`. The first tab
-lists local devices and shares them, the second pairs with other computers and uses their devices,
-and the connection details panel carries the pairing token and key fingerprint the other side
-needs.
+**Windows** — `dotnet build src/NksUsbShare.Desktop`, then run `NksUsbShare.exe`.
 
-**macOS** — `dotnet publish src/NksUsbShare.Mac -r osx-arm64 --self-contained`. The window is
-AppKit, driven straight through the Objective-C runtime, so the application still has no
-dependency of its own. Put the binary in a `.app` bundle so LaunchServices treats it as a normal
-application.
+**macOS** — `dotnet publish src/NksUsbShare.Mac -r osx-arm64 --self-contained`. Put the binary in
+a `.app` bundle so LaunchServices treats it as a normal application.
 
 **Linux** — `dotnet publish src/NksUsbShare.Gtk -r linux-x64 --self-contained`, then run
-`nksusb-gtk`. The window is GTK 3 through plain P/Invoke; GTK is already on every Linux desktop,
-so nothing new is installed. On a machine with no display it says so and exits rather than
-failing obscurely.
-
-All three windows show the same thing in the same shape: identity and pairing details pinned at
-the top, then a table of devices with a button per row. Each of them also lists the computers that
-have connected, with a button to block or re-admit one; the Windows window adds a dialog per share
-for choosing exactly which computers may use it, and a settings dialog for the node name, listening
-address, port and whether a known key is required.
+`nksusb-gtk`. On a machine with no display it says so and exits rather than failing obscurely.
 
 All of them accept `--home <dir>` like the terminal application, so a second node can be run beside
 the real one without disturbing its settings.
 
 ### Command line (all platforms)
 
-```
+```bash
 dotnet build src/NksUsbShare.Cli
 
 nksusb list                          # local devices and what is shared
-nksusb share 3                       # share the third device in the list
+nksusb share 3                       # share the third device, claiming it from Windows if needed
+nksusb giveback                      # return every claimed device to its original driver
 nksusb serve                         # run the node until interrupted
 
 nksusb pair 192.0.2.10 ABCDE-FGHIJ-KLMNO-PQRST-UVWXY
 nksusb remote 192.0.2.10             # what that host offers
 nksusb import 192.0.2.10 <device-id> # hold a device until interrupted
+nksusb attach 192.0.2.10 <device-id> # hand it to this machine's USB stack
+nksusb storage 192.0.2.10 <device-id># read a remote disk directly, without a driver
 
 nksusb clients                       # computers that have connected here
 nksusb access 3 anyone               # offer the third device to any paired computer
@@ -144,11 +157,38 @@ commands write the settings file, so a node that is already running picks them u
 the windowed applications change their own running node straight away.
 
 Settings live in `%APPDATA%\nks-usbshare` or `~/.config/nks-usbshare`, overridable with
-`NKS_USBSHARE_HOME`.
+`NKS_USBSHARE_HOME` or `--home`.
+
+### MCP server
+
+```json
+{
+  "mcpServers": {
+    "nks-usbshare": {
+      "type": "stdio",
+      "command": "<path-to>/nksusb-mcp"
+    }
+  }
+}
+```
+
+| Tool | Description |
+|------|-------------|
+| `node_info` | Identity, platform, pairing token and listening address |
+| `list_local_devices` | Local USB devices and whether each one is shared |
+| `share_device` / `unshare_device` | Offer a device, optionally claiming it first |
+| `release_claimed_devices` | Give every claimed device back to its original driver |
+| `list_clients` | Computers that have connected to this node |
+| `set_client_blocked` | Refuse or re-admit a computer |
+| `set_device_access` | Choose which computers may use a shared device |
+| `list_hosts` / `pair_host` / `forget_host` | Manage paired computers |
+| `list_remote_devices` | What another computer offers |
+| `import_device` / `release_device` / `list_imports` | Hold and release remote devices |
+| `recent_activity` | The node's activity log |
 
 ## The driver question
 
-Two things in the table above are blocked on the same fact: **only kernel-mode code can take a USB
+Two rows in the table above are blocked on the same fact: **only kernel-mode code can take a USB
 device away from its class driver, or present a virtual one.** This is not an implementation gap
 that more user-mode code can close.
 
@@ -160,7 +200,7 @@ for administrator approval and then hands it over. Nothing has to be installed f
 no third-party signing tool, and **Secure Boot stays on** — `winusb.sys` is already signed by
 Microsoft, so only the small package that points at it has to be trusted.
 
-```
+```bash
 nksusb share 7          # claims the device from Windows first if it has to
 nksusb giveback         # returns every claimed device to its original driver
 ```
@@ -179,18 +219,14 @@ publishes it on a plain USB/IP endpoint bound to **loopback only**, and lets the
 controller attach to that. The network hop is still carried by the encrypted link — the plaintext
 protocol never leaves the machine.
 
-```
-nksusb attach 10.0.0.7 'USB\VID_FFFF&PID_5678\9207014AB5258217200'
-```
-
 Which controller answers depends on the platform:
 
-- **Linux** already has one in the kernel, `vhci_hcd`, driven through the `usbip` tool. Nothing
-  has to be written, installed or signed.
+- **Linux** already has one in the kernel, `vhci_hcd`. Nothing has to be written, installed or
+  signed.
 - **Windows** has no in-box virtual device. It ships the framework to build one —
   [`UdeCx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/writing-a-ude-client-driver),
   the USB Device Emulation class extension — but a KMDF client driver still has to be written and
-  signed. Rather than duplicate that,`nksusb attach` works with the controller from
+  signed. Rather than duplicate that, `nksusb attach` works with the controller from
   [usbip-win2](https://github.com/vadimgrn/usbip-win2), which is BSD-2-Clause licensed and ships
   drivers signed by the *Microsoft Windows Hardware Compatibility Publisher*, so they install on
   stock Windows 11 with Secure Boot left on. Install it and `nksusb attach` finds it on its own.
@@ -208,18 +244,17 @@ operating system's driver stack simply does not see it. For storage that is enou
 `nksusb storage` speaks SCSI over Bulk-Only Transport and reads the medium directly.
 
 ```
-nksusb storage 10.0.0.7 'USB\VID_FFFF&PID_5678\9207014AB5258217200'
+nksusb storage 192.0.2.10 'USB\VID_FFFF&PID_5678\0123456789ABC'
 
   SCSI inquiry     Generic Flash Disk rev 2.00
   capacity         31,334,400 blocks of 512 bytes (14.94 GB)
   partition        type 0x0c, 31,332,288 blocks from 2,048
-  volume label     20250512-PL
+  volume label     EXAMPLE
 
-  root directory   4 entries
+  root directory   3 entries
     <dir> System Volume Information            2026-05-13 19:42
-          Nový WinRAR archiv.rar                       24  2026-08-12 23:00
-          nks-usbshare-test.txt                        80  2026-08-12 23:01
-          nks-usbshare-2mb.bin                  2,097,152  2026-08-12 23:01
+          example-note.txt                             80  2026-08-12 23:01
+          example-2mb.bin                       2,097,152  2026-08-12 23:01
 ```
 
 That listing was produced on a Mac, from a flash drive plugged into a Windows machine.
@@ -228,26 +263,64 @@ A driver is only unavoidable for *arbitrary* devices. Storage, printers and scan
 network protocol both operating systems already speak — iSCSI, IPP, and eSCL — so those three
 classes could be carried with no kernel component anywhere.
 
-## Repository layout
+## No dependencies
 
-```
-src/NksUsbShare.Core      protocol, security, USB backends, host and client engines
-src/NksUsbShare.Cli       cross-platform command line
-src/NksUsbShare.Desktop   WPF application for Windows
-src/NksUsbShare.Mac       AppKit application for macOS, on the Objective-C runtime
-src/NksUsbShare.Gtk       GTK application for Linux
-src/NksUsbShare.Mcp       management server speaking the Model Context Protocol
-tests/NksUsbShare.Tests   test suite
-tools/bind-winusb.ps1     hands a Windows device to WinUSB so it can be shared, and back again
-```
+There is no NuGet package anywhere in the solution, and none in the test project either. The wire
+protocol, the JSON-RPC of the MCP server, the descriptor parser, the SCSI layer, the FAT32 reader,
+the AppKit and GTK bindings and the test runner are all written here. The only external component
+in the whole project is the optional virtual controller on Windows, which has to be a driver.
 
-## Tests
+## Build
 
-```
+```bash
+dotnet build NksUsbShare.sln
 dotnet run --project tests/NksUsbShare.Tests
+
+# self-contained binaries
+dotnet publish src/NksUsbShare.Cli -c Release -r win-x64  --self-contained -p:PublishSingleFile=true
+dotnet publish src/NksUsbShare.Cli -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true
+dotnet publish src/NksUsbShare.Cli -c Release -r osx-arm64 --self-contained -p:PublishSingleFile=true
 ```
 
 No test framework is used, for the same reason nothing else is: tests are plain methods, failures
 are exceptions, and the exit code is what matters. The suite covers the wire protocol, descriptor
-parsing, the TLS and pairing layer, and a full host-to-client round trip over a real socket.
-Tests that need hardware skip themselves when there is none.
+parsing, the TLS and pairing layer, per-device access lists, blocking, and a full host-to-client
+round trip over a real socket. Tests that need hardware skip themselves when there is none.
+
+## Project structure
+
+```
+NksUsbShare.sln
+├── src/NksUsbShare.Core/      protocol, security, USB backends, host and client engines
+├── src/NksUsbShare.Cli/       cross-platform command line
+├── src/NksUsbShare.Desktop/   WPF application for Windows
+├── src/NksUsbShare.Gtk/       GTK application for Linux
+├── src/NksUsbShare.Mac/       AppKit application for macOS
+├── src/NksUsbShare.Mcp/       Model Context Protocol server
+├── tests/NksUsbShare.Tests/   test suite
+├── tools/bind-winusb.ps1      hands a Windows device to WinUSB and back again
+└── .github/workflows/         CI + Release
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'feat: description'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## Support
+
+- Email: dev@nks-hub.cz
+- Bug reports: [GitHub Issues](https://github.com/lukyrys/nks-usbshare/issues)
+
+## License
+
+Private — NKS Development
+
+---
+
+<p align="center">
+  Made by <a href="https://github.com/nks-hub">NKS Hub</a>
+</p>

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: .NET build + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      # The Windows application is WPF, so it only builds on Windows. Everywhere else the
+      # portable projects are built one by one instead of the whole solution.
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: dotnet build NksUsbShare.sln -c Release
+
+      - name: Build (Linux and macOS)
+        if: runner.os != 'Windows'
+        run: |
+          for project in Core Cli Gtk Mac Mcp; do
+            dotnet build src/NksUsbShare.$project -c Release
+          done
+          dotnet build tests/NksUsbShare.Tests -c Release
+
+      # The suite is a plain console application: it prints its results and the exit code is the
+      # verdict. Tests that need hardware skip themselves when a runner has none.
+      - name: Test
+        run: dotnet run --project tests/NksUsbShare.Tests -c Release --no-build

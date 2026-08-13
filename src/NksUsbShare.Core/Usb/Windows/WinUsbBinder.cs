@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.Versioning;
 using NksUsbShare.Core.Diagnostics;
 
@@ -11,9 +10,9 @@ namespace NksUsbShare.Core.Usb.Windows;
 ///
 /// Windows only allows user-mode transfers on a device bound to winusb.sys, so a device held by
 /// its class driver cannot be forwarded as it stands. Rebinding needs a driver package: a
-/// generated INF, a catalog signed by a certificate the machine trusts, and an install through
-/// pnputil. Every one of those steps is done by tooling that ships with Windows, so no toolkit
-/// has to be installed and Secure Boot can stay on — winusb.sys itself is already signed by
+/// generated INF, a catalog signed by a certificate the machine trusts, and an install into the
+/// driver store. All of it goes through Windows' own calls, so nothing has to be installed
+/// alongside the application and Secure Boot can stay on — winusb.sys itself is already signed by
 /// Microsoft, and only the small package pointing at it needs trust.
 ///
 /// It does need administrator rights, which is why the work happens in an elevated child process
@@ -22,8 +21,6 @@ namespace NksUsbShare.Core.Usb.Windows;
 [SupportedOSPlatform("windows")]
 public sealed class WinUsbBinder(ActivityLog log)
 {
-    private const string ScriptResource = "NksUsbShare.Core.Usb.Windows.bind-winusb.ps1";
-
     public sealed record Result(bool Success, string Message);
 
     /// <summary>Claims the device away from its current driver so it can be shared.</summary>
@@ -35,7 +32,7 @@ public sealed class WinUsbBinder(ActivityLog log)
                 $"Could not work out a hardware id for {device.DisplayName}."));
 
         log.Info("winusb", $"Handing {device.DisplayName} ({hardwareId}) to WinUSB.");
-        return RunAsync(["-HardwareId", hardwareId, "-Description", $"NKS UsbShare - {device.DisplayName}"],
+        return RunAsync([WinUsbHelper.BindCommand, hardwareId, $"NKS UsbShare - {device.DisplayName}"],
             cancellationToken);
     }
 
@@ -43,7 +40,7 @@ public sealed class WinUsbBinder(ActivityLog log)
     public Task<Result> RestoreAllAsync(CancellationToken cancellationToken)
     {
         log.Info("winusb", "Giving claimed devices back to their original drivers.");
-        return RunAsync(["-Restore"], cancellationToken);
+        return RunAsync([WinUsbHelper.RestoreCommand], cancellationToken);
     }
 
     /// <summary>
@@ -63,19 +60,16 @@ public sealed class WinUsbBinder(ActivityLog log)
 
     private async Task<Result> RunAsync(string[] arguments, CancellationToken cancellationToken)
     {
-        var scriptPath = await ExtractScriptAsync(cancellationToken).ConfigureAwait(false);
         var transcript = Path.Combine(Path.GetTempPath(), $"nksusb-bind-{Guid.NewGuid():N}.log");
 
-        // Every argument is quoted, not just the ones with spaces: a hardware id looks like
-        // USB\VID_1234&PID_5678, and an unquoted ampersand ends the command as far as PowerShell
-        // is concerned. Switches start with a dash and must stay bare.
-        var quoted = string.Join(' ', arguments.Select(a =>
-            a.StartsWith('-') ? a : $"'{a.Replace("'", "''")}'"));
-        var command =
-            $"-NoProfile -ExecutionPolicy Bypass -Command " +
-            $"\"& '{scriptPath}' {quoted} *> '{transcript}'\"";
+        // The elevated half is this same executable, run again with a command nobody types. There
+        // is no script and no interpreter in the way — the driver work is the application's own.
+        var self = Environment.ProcessPath
+                   ?? throw new InvalidOperationException("The running executable could not be located.");
 
-        var startInfo = new ProcessStartInfo("powershell.exe", command)
+        var command = string.Join(' ', arguments.Append("--log").Append(transcript).Select(Quote));
+
+        var startInfo = new ProcessStartInfo(self, command)
         {
             // Elevation is what makes Windows show its consent prompt, and it needs the shell.
             UseShellExecute = true,
@@ -132,8 +126,8 @@ public sealed class WinUsbBinder(ActivityLog log)
     private async Task<string> FollowAsync(Process process, string transcript, CancellationToken cancellationToken)
     {
         // The whole file is re-read on every poll and lines already reported are counted, rather
-        // than seeking to a saved offset: PowerShell chooses the transcript's encoding itself, and
-        // a character count is not a byte offset once it picks UTF-16.
+        // than seeking to a saved offset: a character count is not a byte offset, and the point is
+        // to show the operator what is happening, not to read the file efficiently.
         var text = "";
         var reported = 0;
 
@@ -199,23 +193,9 @@ public sealed class WinUsbBinder(ActivityLog log)
         return failure ?? lines.LastOrDefault();
     }
 
-    /// <summary>
-    /// The script travels inside the assembly so a published binary is self-contained; it is
-    /// written out fresh each run so an edited copy on disk cannot be picked up instead.
-    /// </summary>
-    private static async Task<string> ExtractScriptAsync(CancellationToken cancellationToken)
-    {
-        var directory = Path.Combine(Path.GetTempPath(), "nksusb-tools");
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, "bind-winusb.ps1");
-
-        await using var stream = typeof(WinUsbBinder).Assembly.GetManifestResourceStream(ScriptResource)
-                                 ?? throw new InvalidOperationException(
-                                     $"The helper script is missing from the build. Available: " +
-                                     string.Join(", ", Assembly.GetExecutingAssembly().GetManifestResourceNames()));
-
-        await using var file = File.Create(path);
-        await stream.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
-        return path;
-    }
+    /// <summary>Quotes one argument for a command line; a device description has spaces in it.</summary>
+    private static string Quote(string argument) =>
+        argument.Length > 0 && !argument.Contains(' ') && !argument.Contains('"')
+            ? argument
+            : '"' + argument.Replace("\"", "\\\"") + '"';
 }

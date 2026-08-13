@@ -107,49 +107,6 @@ public static class UsbTests
 
         TestRunner.Add(suite, "an empty string descriptor decodes to an empty string", () =>
             Assert.Equal("", UsbDescriptorParser.DecodeStringDescriptor([0x02, 0x03]), "empty descriptor"));
-
-        // The application runs the copy of the helper carried inside the assembly. That copy once
-        // lived beside the repository's own, the two drifted, and a repaired script sat unused
-        // while the stale one shipped. This is the guard against that returning.
-        TestRunner.Add(suite, "the WinUSB helper in the assembly is the one in the repository", () =>
-        {
-            var assembly = typeof(NksUsbShare.Core.NodeService).Assembly;
-            const string resource = "NksUsbShare.Core.Usb.Windows.bind-winusb.ps1";
-
-            using var stream = assembly.GetManifestResourceStream(resource);
-            Assert.NotNull(stream, $"'{resource}' is embedded in the assembly");
-
-            var embedded = new StreamReader(stream!).ReadToEnd();
-            var onDisk = File.ReadAllText(RepositoryFile("tools/bind-winusb.ps1"));
-
-            Assert.Equal(Normalise(onDisk), Normalise(embedded), "the shipped helper matches tools/bind-winusb.ps1");
-        });
-
-        TestRunner.Add(suite, "the helper is not duplicated anywhere else in the tree", () =>
-        {
-            var copies = Directory
-                .GetFiles(RepositoryRoot(), "bind-winusb.ps1", SearchOption.AllDirectories)
-                .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
-                            && !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-                .ToArray();
-
-            Assert.Equal(1, copies.Length,
-                $"exactly one copy exists; found: {string.Join(", ", copies)}");
-        });
     }
 
-    private static string Normalise(string text) => text.Replace("\r\n", "\n").TrimEnd();
-
-    private static string RepositoryFile(string relative) => Path.Combine(RepositoryRoot(), relative);
-
-    /// <summary>Walks up from the test binary until the solution file appears.</summary>
-    private static string RepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "NksUsbShare.sln")))
-            directory = directory.Parent;
-
-        return directory?.FullName
-               ?? throw new InvalidOperationException("The repository root could not be found from the test binary.");
-    }
 }

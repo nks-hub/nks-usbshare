@@ -13,14 +13,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Carried inside the assembly so a published binary can hand a device to WinUSB without
-         anything else being installed alongside it.
-
-         The file under tools/ is the only copy. It used to be duplicated here, the two drifted
-         apart, and the application quietly shipped the stale one while the repaired script sat
-         next to it unused. The logical name keeps the resource id the code looks up. -->
-    <EmbeddedResource Include="..\..\tools\bind-winusb.ps1"
-                      LogicalName="NksUsbShare.Core.Usb.Windows.bind-winusb.ps1" />
+    <!-- The tests exercise a few pieces that have no reason to be part of the public surface. -->
+    <InternalsVisibleTo Include="NksUsbShare.Tests" />
   </ItemGroup>
 
 </Project>

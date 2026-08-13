@@ -218,7 +218,8 @@ nksusb giveback         # returns every claimed device to its original driver
 ```
 
 In the desktop application the button reads *Claim and share*, and *Sharing → Give devices back*
-undoes it. The same helper is available on its own as `tools/bind-winusb.ps1` for scripted setups.
+undoes it. Both run the application again with administrator rights — there is no script and no
+interpreter in the way; the driver work is the application's own code.
 
 Two details are worth knowing, because both took real hardware to find:
 
@@ -349,14 +350,13 @@ NksUsbShare.sln
 ├── src/NksUsbShare.Mac/       AppKit application for macOS
 ├── src/NksUsbShare.Mcp/       Model Context Protocol server
 ├── tests/NksUsbShare.Tests/   test suite
-├── tools/bind-winusb.ps1      hands a Windows device to WinUSB and back again
 └── .github/workflows/         CI + Release
 ```
 
-The Windows claim currently runs through `tools/bind-winusb.ps1`, driven from an elevated child
-process. A native replacement is in `Usb/Windows/` — the device tree, the forced driver install
-and the hub port cycle are already native and in use; building the driver catalog without the
-script is not finished, and the file says so plainly rather than pretending otherwise.
+The Windows claim is native, in `Usb/Windows/`: the device tree through cfgmgr32, the driver
+package built and its catalog signed through wintrust and mssign32, the install through setupapi
+and newdev, and the hub port cycle through a hub ioctl. It runs in an elevated copy of the same
+executable, because changing a driver needs administrator rights.
 
 ## Contributing
 

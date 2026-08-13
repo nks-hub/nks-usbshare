@@ -13,13 +13,6 @@ namespace NksUsbShare.Core.Usb.Windows;
 /// Windows will not install a third-party INF without a signed catalog, so all three are needed.
 /// None of it requires the WDK or any signing toolkit: the certificate comes from .NET, the
 /// catalog from wintrust, and the signature from mssign32 — the call signtool itself makes.
-///
-/// NOT FINISHED, and not yet used by anything that ships. The INF, the certificate and the
-/// signing work; <see cref="Catalog.Build"/> gets as far as adding the member and its attributes
-/// and then CryptCATPersistStore writes a zero-length file without setting an error. Until that
-/// is understood, <see cref="WinUsbBinder"/> still drives tools/bind-winusb.ps1, which is
-/// verified against real hardware. The rest of the native path — the device tree, the forced
-/// install, the port cycle — is proven and in use.
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal sealed class DriverPackage : IDisposable
@@ -66,6 +59,10 @@ internal sealed class DriverPackage : IDisposable
 
         return new DriverPackage(directory, infPath, interfaceGuid);
     }
+
+    /// <summary>Builds the catalog alone. Needs no certificate and no administrator rights.</summary>
+    internal static void BuildCatalog(string directory, string catalogPath, string hardwareId) =>
+        Catalog.Build(directory, catalogPath, hardwareId);
 
     private static string BuildInf(string hardwareId, string description, string interfaceGuid)
     {
@@ -191,154 +188,77 @@ internal sealed class DriverPackage : IDisposable
     {
         public static void Build(string directory, string catalogPath, string hardwareId)
         {
-            var handle = DriverNative.CryptCATOpen(catalogPath, DriverNative.CryptcatOpenCreatenew,
-                IntPtr.Zero, DriverNative.CryptcatVersion2,
-                DriverNative.X509AsnEncoding | DriverNative.Pkcs7AsnEncoding);
+            var cdfPath = Path.Combine(directory, "nksusb.cdf");
+            File.WriteAllText(cdfPath, BuildDefinition(directory, catalogPath, hardwareId), Encoding.ASCII);
 
-            if (handle == IntPtr.Zero || handle == new IntPtr(-1))
-                throw new UsbBackendException($"The catalog could not be created (Win32 {Marshal.GetLastWin32Error()}).");
+            var problems = new List<string>();
+            DriverNative.CdfParseError report = (area, error, line) =>
+                problems.Add($"area {area}, error 0x{error:X}, at '{Marshal.PtrToStringUni(line)}'");
 
+            var cdf = DriverNative.CryptCATCDFOpen(cdfPath, report);
+            if (cdf == IntPtr.Zero)
+                throw new UsbBackendException($"The catalog definition was rejected (Win32 {Marshal.GetLastWin32Error()}). {string.Join("; ", problems)}");
+
+            var members = 0;
             try
             {
-                foreach (var file in System.IO.Directory.GetFiles(directory, "*.inf"))
-                    AddMember(handle, file);
-
-                // Windows matches a catalog to a device by this attribute when the package is
-                // installed, so the hardware id has to be recorded in it.
-                PutCatalogAttribute(handle, "HWID1", hardwareId);
-
-                if (!DriverNative.CryptCATPersistStore(handle))
-                    throw new UsbBackendException($"The catalog could not be written (Win32 {Marshal.GetLastWin32Error()}).");
-            }
-            finally
-            {
-                DriverNative.CryptCATClose(handle);
-            }
-        }
-
-        /// <summary>
-        /// The subject type Windows uses for a file that is not a signed binary. An INF is such a
-        /// file: nothing claims it, so the lookup below fails and this is what a catalog records.
-        /// </summary>
-        private static readonly Guid FlatFileSubject = new("de351a42-8e59-11d0-8c47-00c04fc295ee");
-
-        private static void AddMember(IntPtr catalog, string filePath)
-        {
-            if (!DriverNative.CryptSIPRetrieveSubjectGuid(filePath, IntPtr.Zero, out var subject))
-                subject = FlatFileSubject;
-
-            var indirect = CreateIndirectData(filePath, subject, out var indirectSize);
-
-            try
-            {
-                var name = Path.GetFileName(filePath);
-                var member = DriverNative.CryptCATPutMemberInfo(catalog, filePath, name, ref subject,
-                    0x200, indirectSize, indirect);
-
-                if (member == IntPtr.Zero)
-                    throw new UsbBackendException($"'{name}' could not be added to the catalog (Win32 {Marshal.GetLastWin32Error()}).");
-
-                PutMemberAttribute(catalog, member, "File", name);
-                PutMemberAttribute(catalog, member, "OSAttr", "2:6.0,2:6.1,2:6.2,2:6.3,2:10.0");
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(indirect);
-            }
-        }
-
-        /// <summary>
-        /// Asks the subject interface package for the file's hash in the shape a catalog stores.
-        /// A flat file such as an INF is hashed whole; the SIP knows how, so this does not have to.
-        /// </summary>
-        private static IntPtr CreateIndirectData(string filePath, Guid subject, out uint size)
-        {
-            var dispatch = new DriverNative.SipDispatchInfo { Size = (uint)Marshal.SizeOf<DriverNative.SipDispatchInfo>() };
-            if (!DriverNative.CryptSIPLoad(ref subject, 0, ref dispatch))
-                throw new UsbBackendException($"The subject interface package could not be loaded (Win32 {Marshal.GetLastWin32Error()}).");
-
-            var create = Marshal.GetDelegateForFunctionPointer<DriverNative.CryptSipCreateIndirectData>(dispatch.CreateIndirectData);
-
-            using var file = File.OpenRead(filePath);
-            var fileHandle = file.SafeFileHandle.DangerousGetHandle();
-
-            var algorithm = Marshal.StringToHGlobalAnsi("2.16.840.1.101.3.4.2.1");   // SHA-256
-            var name = Marshal.StringToHGlobalUni(filePath);
-            var subjectGuid = Marshal.AllocHGlobal(Marshal.SizeOf<Guid>());
-            Marshal.StructureToPtr(subject, subjectGuid, false);
-
-            try
-            {
-                var info = new DriverNative.SipSubjectInfo
+                // Walking the members is what hashes the files into the store; the catalog
+                // attributes have to come afterwards, because the parser reads the file in order.
+                var tag = IntPtr.Zero;
+                while (true)
                 {
-                    Size = (uint)Marshal.SizeOf<DriverNative.SipSubjectInfo>(),
-                    SubjectType = subjectGuid,
-                    File = fileHandle,
-                    FileName = name,
-                    EncodingType = DriverNative.X509AsnEncoding | DriverNative.Pkcs7AsnEncoding,
-                    DigestAlgorithm = new DriverNative.CryptAlgorithmIdentifier { ObjectId = algorithm },
-                };
-
-                uint needed = 0;
-                if (!create(ref info, ref needed, IntPtr.Zero) || needed == 0)
-                    throw new UsbBackendException($"The file hash could not be sized (Win32 {Marshal.GetLastWin32Error()}).");
-
-                // The sizing call reads the file to the end. The real call has to start from the
-                // beginning again or it hashes nothing and the catalog is quietly wrong.
-                file.Position = 0;
-
-                var buffer = Marshal.AllocHGlobal((int)needed);
-                if (!create(ref info, ref needed, buffer))
-                {
-                    Marshal.FreeHGlobal(buffer);
-                    throw new UsbBackendException($"The file hash could not be produced (Win32 {Marshal.GetLastWin32Error()}).");
+                    var member = IntPtr.Zero;
+                    tag = DriverNative.CryptCATCDFEnumMembersByCDFTagEx(cdf, tag, report, ref member, true, IntPtr.Zero);
+                    if (tag == IntPtr.Zero) break;
+                    members++;
                 }
 
-                size = needed;
-                return buffer;
+                var attribute = IntPtr.Zero;
+                while ((attribute = DriverNative.CryptCATCDFEnumCatAttributes(cdf, attribute, report)) != IntPtr.Zero) { }
             }
             finally
             {
-                Marshal.FreeHGlobal(algorithm);
-                Marshal.FreeHGlobal(name);
-                Marshal.FreeHGlobal(subjectGuid);
+                // This is what writes the catalog out, so it runs even when the walk went wrong.
+                DriverNative.CryptCATCDFClose(cdf);
+                GC.KeepAlive(report);
             }
+
+            if (members == 0)
+                throw new UsbBackendException($"No file went into the catalog. {string.Join("; ", problems)}");
+
+            if (!File.Exists(catalogPath) || new FileInfo(catalogPath).Length == 0)
+                throw new UsbBackendException($"The catalog came out empty. {string.Join("; ", problems)}");
         }
 
-        private static void PutMemberAttribute(IntPtr catalog, IntPtr member, string tag, string value)
+        /// <summary>
+        /// The catalog definition file, in the format makecat reads. A tag beginning with
+        /// &lt;HASH&gt; tells the parser to key the member by the hash of the file, which is how
+        /// the driver loader looks a file up.
+        /// </summary>
+        private static string BuildDefinition(string directory, string catalogPath, string hardwareId)
         {
-            var buffer = Marshal.StringToHGlobalUni(value);
-            try
-            {
-                var size = (uint)((value.Length + 1) * 2);
-                var flags = DriverNative.CryptcatAttrNameascii | DriverNative.CryptcatAttrDataascii
-                            | DriverNative.CryptcatAttrAuthenticated;
+            var text = new StringBuilder()
+                .AppendLine("[CatalogHeader]")
+                .AppendLine($"Name={Path.GetFileName(catalogPath)}")
+                .AppendLine($"ResultDir={directory}")
+                .AppendLine("PublicVersion=0x00000200")
+                .AppendLine("CatalogVersion=2")
+                .AppendLine("HashAlgorithms=SHA256")
+                .AppendLine("PageHashes=false")
+                // Windows matches a catalog to a device by this attribute, so the hardware id has
+                // to be recorded in it.
+                .AppendLine($"CATATTR1=0x10010001:HWID1:{hardwareId}")
+                .AppendLine("[CatalogFiles]");
 
-                if (DriverNative.CryptCATPutAttrInfo(catalog, member, tag, flags, size, buffer) == IntPtr.Zero)
-                    throw new UsbBackendException($"The catalog attribute '{tag}' was refused (Win32 {Marshal.GetLastWin32Error()}).");
-            }
-            finally
+            foreach (var file in System.IO.Directory.GetFiles(directory, "*.inf"))
             {
-                Marshal.FreeHGlobal(buffer);
+                var name = Path.GetFileName(file);
+                text.AppendLine($"<HASH>{name}={file}")
+                    .AppendLine($"<HASH>{name}ATTR1=0x10010001:File:{name}")
+                    .AppendLine($"<HASH>{name}ATTR2=0x10010001:OSAttr:2:6.0,2:6.1,2:6.2,2:6.3,2:10.0");
             }
-        }
 
-        private static void PutCatalogAttribute(IntPtr catalog, string tag, string value)
-        {
-            var buffer = Marshal.StringToHGlobalUni(value);
-            try
-            {
-                var size = (uint)((value.Length + 1) * 2);
-                var flags = DriverNative.CryptcatAttrNameascii | DriverNative.CryptcatAttrDataascii
-                            | DriverNative.CryptcatAttrAuthenticated;
-
-                if (DriverNative.CryptCATPutCatAttrInfo(catalog, tag, flags, size, buffer) == IntPtr.Zero)
-                    throw new UsbBackendException($"The catalog attribute '{tag}' was refused (Win32 {Marshal.GetLastWin32Error()}).");
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(buffer);
-            }
+            return text.ToString();
         }
 
         /// <summary>

@@ -67,6 +67,35 @@ public sealed class DeviceNode
     public bool Reenumerate() => DriverNative.CM_Reenumerate_DevNode(_handle, 0) == DriverNative.CrSuccess;
 
     /// <summary>
+    /// Takes the driver off this device, the way Device Manager's "uninstall device" does. The
+    /// device is left with none, so the next enumeration of its hub gives it the driver Windows
+    /// would have chosen in the first place. This is the only way back for a device still held by
+    /// a package that has already been deleted.
+    /// </summary>
+    public string UninstallDriver()
+    {
+        var set = DriverNative.SetupDiCreateDeviceInfoList(IntPtr.Zero, IntPtr.Zero);
+        if (set == new IntPtr(-1))
+            return $"the device list could not be created (Win32 {Marshal.GetLastWin32Error()})";
+
+        try
+        {
+            var data = new DriverNative.DevInfoData { Size = (uint)Marshal.SizeOf<DriverNative.DevInfoData>() };
+            if (!DriverNative.SetupDiOpenDeviceInfoW(set, InstanceId, IntPtr.Zero, 0, ref data))
+                return $"the device could not be opened (Win32 {Marshal.GetLastWin32Error()})";
+
+            if (!DriverNative.DiUninstallDevice(IntPtr.Zero, set, ref data, 0, out var reboot))
+                return $"the driver could not be removed (Win32 {Marshal.GetLastWin32Error()})";
+
+            return reboot ? "driver removed; Windows wants a reboot to finish" : "driver removed";
+        }
+        finally
+        {
+            DriverNative.SetupDiDestroyDeviceInfoList(set);
+        }
+    }
+
+    /// <summary>
     /// True when Windows has parked this device until the machine restarts. Installing a driver
     /// that filters a whole device class does this to the USB hubs, and every device on them —
     /// keyboards and mice included — stops working until the stack is rebuilt.

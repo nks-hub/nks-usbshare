@@ -89,6 +89,47 @@ public static class LiveHardwareTests
                 "opening a bogus device id");
         });
 
+        // A claim installs a driver package, and Windows refuses a package whose catalog does not
+        // cover its INF. Building the catalog needs no administrator rights, so it is checked here.
+        TestRunner.Add(suite, "a driver catalog is built for an INF", () =>
+        {
+            if (!OperatingSystem.IsWindows()) Assert.Skip("catalogs are a Windows idea");
+
+            var directory = Path.Combine(Path.GetTempPath(), "nksusb-cat-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(directory);
+
+            try
+            {
+                var infPath = Path.Combine(directory, "nksusb.inf");
+                File.WriteAllText(infPath, "[Version]\r\nSignature = \"$Windows NT$\"\r\n",
+                    System.Text.Encoding.Unicode);
+
+                var catalogPath = Path.Combine(directory, "nksusb.cat");
+                NksUsbShare.Core.Usb.Windows.DriverPackage.BuildCatalog(directory, catalogPath, @"USB\VID_0000&PID_0000");
+
+                Assert.True(File.Exists(catalogPath), "the catalog is written");
+
+                var length = new FileInfo(catalogPath).Length;
+                Assert.True(length > 200, $"and holds a real store ({length} bytes)");
+
+                // Windows itself has to be able to read it back, member and all.
+                var handle = NksUsbShare.Core.Usb.Windows.DriverNative.CryptCATOpen(catalogPath, 0, IntPtr.Zero, 0, 0);
+                Assert.True(handle != IntPtr.Zero && handle != new IntPtr(-1), "Windows opens it as a catalog");
+
+                var members = 0;
+                var member = IntPtr.Zero;
+                while ((member = NksUsbShare.Core.Usb.Windows.DriverNative.CryptCATEnumerateMember(handle, member)) != IntPtr.Zero)
+                    members++;
+
+                NksUsbShare.Core.Usb.Windows.DriverNative.CryptCATClose(handle);
+                Assert.True(members > 0, $"and finds the INF inside it ({members} members)");
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        });
+
         // Finding the virtual host controller means walking the whole tree, not just USB devices.
         TestRunner.Add(suite, "the whole device tree can be walked", () =>
         {

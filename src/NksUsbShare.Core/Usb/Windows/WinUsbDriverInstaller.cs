@@ -72,6 +72,12 @@ public sealed class WinUsbDriverInstaller(Action<string> report)
         if (string.Equals(current, "WinUSB", StringComparison.OrdinalIgnoreCase))
         {
             report($"{name} is already bound to WinUSB.");
+
+            // It is remembered even so. A device left on WinUSB by an earlier run that was
+            // interrupted is otherwise stranded: nothing records it, so nothing gives it back.
+            if (!Bound().Any(b => b.InstanceId.Equals(device.InstanceId, StringComparison.OrdinalIgnoreCase)))
+                Remember(hardwareId, device, name, originalDriver: "unknown", published: "", interfaceGuid: "");
+
             return;
         }
 
@@ -111,18 +117,7 @@ public sealed class WinUsbDriverInstaller(Action<string> report)
         var service = settled?.Service ?? "gone";
         report($"Driver now:      {service}");
 
-        var entries = Bound().Where(b => !b.HardwareId.Equals(hardwareId, StringComparison.OrdinalIgnoreCase)).ToList();
-        entries.Add(new BoundDevice
-        {
-            HardwareId = hardwareId,
-            InstanceId = device.InstanceId,
-            FriendlyName = name,
-            OriginalDriver = current,
-            OriginalInf = device.DriverInfPath ?? "",
-            PublishedName = published,
-            InterfaceGuid = package.InterfaceGuid,
-        });
-        Save(entries);
+        Remember(hardwareId, device, name, current, published, package.InterfaceGuid);
 
         if (!string.Equals(service, "WinUSB", StringComparison.OrdinalIgnoreCase))
             throw new UsbBackendException(
@@ -131,11 +126,42 @@ public sealed class WinUsbDriverInstaller(Action<string> report)
         report("The device is ready to be shared.");
     }
 
+    /// <summary>Records what a device has to be given back to, replacing any earlier note of it.</summary>
+    private static void Remember(string hardwareId, DeviceNode device, string name, string originalDriver,
+        string published, string interfaceGuid)
+    {
+        var entries = Bound()
+            .Where(b => !b.HardwareId.Equals(hardwareId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        entries.Add(new BoundDevice
+        {
+            HardwareId = hardwareId,
+            InstanceId = device.InstanceId,
+            FriendlyName = name,
+            OriginalDriver = originalDriver,
+            OriginalInf = device.DriverInfPath ?? "",
+            PublishedName = published,
+            InterfaceGuid = interfaceGuid,
+        });
+
+        Save(entries);
+    }
+
     /// <summary>Gives every device this tool has taken back to the driver it had before.</summary>
     public void RestoreAll()
     {
         var entries = Bound();
-        if (entries.Count == 0)
+
+        // Anything left in the driver store under this tool's provider name is ours as well, even
+        // when the record of it was lost — otherwise a device claimed by an interrupted run stays
+        // on WinUSB with nothing left to point at the package holding it there.
+        var packages = entries.Select(e => e.PublishedName).Where(p => p.Length > 0)
+            .Concat(OrphanPackages())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (entries.Count == 0 && packages.Count == 0)
         {
             report("No devices are claimed.");
             Save([]);
@@ -152,11 +178,22 @@ public sealed class WinUsbDriverInstaller(Action<string> report)
             if (parent is not null) hubs[entry.InstanceId] = parent;
         }
 
-        foreach (var published in entries.Select(e => e.PublishedName).Where(p => p.Length > 0).Distinct())
+        foreach (var published in packages)
         {
             report($"Removing driver package {published}...");
+
+            // Deleting the package is not the same as taking it off the devices using it; this
+            // call does both, which is what leaves the device free to find its class driver again.
+            var infPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "INF", published);
+            if (DriverNative.DiUninstallDriverW(IntPtr.Zero, infPath, 0, out var reboot))
+            {
+                if (reboot) report("  Windows wants a reboot to finish removing it.");
+                continue;
+            }
+
+            report($"  the package could not be uninstalled from its devices (Win32 {Marshal.GetLastWin32Error()}); deleting it anyway.");
             if (!DriverNative.SetupUninstallOEMInfW(published, DriverNative.SuoiForceDelete, IntPtr.Zero))
-                report($"  {published} could not be removed (Win32 {Marshal.GetLastWin32Error()}).");
+                report($"  {published} could not be removed either (Win32 {Marshal.GetLastWin32Error()}).");
         }
 
         foreach (var entry in entries)
@@ -174,6 +211,30 @@ public sealed class WinUsbDriverInstaller(Action<string> report)
                 node = DeviceNode.Open(entry.InstanceId);
             }
 
+            // The other way round is just as common: the node survives the uninstall and keeps
+            // running on WinUSB, because Windows only chooses a driver when something changes on
+            // the port. Cycling it is that change, and the class driver wins the second time.
+            if (node is not null && string.Equals(node.Service, "WinUSB", StringComparison.OrdinalIgnoreCase))
+            {
+                report($"  {entry.FriendlyName}: still on WinUSB, cycling its hub port...");
+                report("    " + node.CyclePort());
+                Thread.Sleep(TimeSpan.FromSeconds(6));
+                node = DeviceNode.Open(entry.InstanceId) ?? node;
+            }
+
+            // A device can hold on to WinUSB even after the package is gone, because a driver
+            // stays chosen until something makes Windows choose again. Taking the driver off the
+            // device does, and its hub then hands it to the class driver.
+            if (node is not null && string.Equals(node.Service, "WinUSB", StringComparison.OrdinalIgnoreCase))
+            {
+                report($"  {entry.FriendlyName}: taking the driver off the device...");
+                report("    " + node.UninstallDriver());
+
+                if (hubs.TryGetValue(entry.InstanceId, out var parent)) parent.Reenumerate();
+                Thread.Sleep(TimeSpan.FromSeconds(5));
+                node = DeviceNode.Open(entry.InstanceId) ?? node;
+            }
+
             report(node?.Service is { } service
                 ? $"  {entry.FriendlyName}: driver now {service} (was {entry.OriginalDriver})"
                 : $"  {entry.FriendlyName}: did not come back; unplug it and plug it in again.");
@@ -181,6 +242,26 @@ public sealed class WinUsbDriverInstaller(Action<string> report)
 
         Save([]);
         report("Done.");
+    }
+
+    /// <summary>
+    /// The oemNN.inf names in the driver store that this tool published. The store keeps a copy of
+    /// every installed INF under %windir%\INF, so the provider line is enough to recognise ours.
+    /// </summary>
+    private static IEnumerable<string> OrphanPackages()
+    {
+        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "INF");
+
+        foreach (var path in Directory.EnumerateFiles(directory, "oem*.inf"))
+        {
+            string text;
+            try { text = File.ReadAllText(path); }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+
+            if (text.Contains("NKS UsbShare", StringComparison.OrdinalIgnoreCase))
+                yield return Path.GetFileName(path);
+        }
     }
 
     private static bool IsOnWinUsb(DeviceNode device)

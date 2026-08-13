@@ -85,6 +85,33 @@ internal static class DriverNative
     [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern bool SetupUninstallOEMInfW(string infFileName, uint flags, IntPtr reserved);
 
+    // Taking the driver off one device — what Device Manager calls "uninstall device" — needs the
+    // device handed over as a setupapi device-info record rather than a cfgmgr32 devnode.
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr SetupDiCreateDeviceInfoList(IntPtr classGuid, IntPtr parent);
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern bool SetupDiOpenDeviceInfoW(IntPtr deviceInfoSet, string instanceId,
+        IntPtr parent, uint flags, ref DevInfoData deviceInfoData);
+
+    [DllImport("setupapi.dll", SetLastError = true)]
+    internal static extern bool SetupDiDestroyDeviceInfoList(IntPtr deviceInfoSet);
+
+    [DllImport("newdev.dll", SetLastError = true)]
+    internal static extern bool DiUninstallDevice(IntPtr parent, IntPtr deviceInfoSet,
+        ref DevInfoData deviceInfoData, uint flags, out bool rebootRequired);
+
+    /// <summary>SP_DEVINFO_DATA.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DevInfoData
+    {
+        public uint Size;
+        public Guid ClassGuid;
+        public uint DevInst;
+        public IntPtr Reserved;
+    }
+
     internal const uint SpcopyNewer = 0x0004;
     internal const uint SpostNone = 0;
     internal const uint SuoiForceDelete = 0x0001;
@@ -97,6 +124,14 @@ internal static class DriverNative
 
     /// <summary>Install the named package even when Windows ranks another driver higher.</summary>
     internal const uint InstallflagForce = 0x0001;
+
+    /// <summary>
+    /// Removes a driver package and takes it off every device using it, which is the part that
+    /// matters: deleting the package alone leaves the device running on the driver it was given.
+    /// </summary>
+    [DllImport("newdev.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern bool DiUninstallDriverW(IntPtr parent, string infPath, uint flags,
+        out bool rebootRequired);
 
     // ---- kernel32: the hub port cycle ----
 
@@ -134,98 +169,33 @@ internal static class DriverNative
     internal static extern IntPtr CryptCATOpen(string fileName, uint openFlags, IntPtr cryptProvider,
         uint publicVersion, uint encodingType);
 
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
-    internal static extern IntPtr CryptCATPutMemberInfo(IntPtr catalog, string? fileName, string referenceTag,
-        ref Guid subject, uint certVersion, uint indirectDataSize, IntPtr indirectData);
-
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
-    internal static extern IntPtr CryptCATPutAttrInfo(IntPtr catalog, IntPtr member, string referenceTag,
-        uint attributeFlags, uint valueSize, IntPtr value);
-
-    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
-    internal static extern IntPtr CryptCATPutCatAttrInfo(IntPtr catalog, string referenceTag,
-        uint attributeFlags, uint valueSize, IntPtr value);
-
-    [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = true)]
-    internal static extern bool CryptCATPersistStore(IntPtr catalog);
-
     [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = true)]
     internal static extern bool CryptCATClose(IntPtr catalog);
 
-    internal const uint CryptcatOpenCreatenew = 0x00000001;
+    [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = true)]
+    internal static extern IntPtr CryptCATEnumerateMember(IntPtr catalog, IntPtr previous);
 
-    /// <summary>CRYPTCAT_VERSION_2 — the version that records SHA-256 hashes.</summary>
-    internal const uint CryptcatVersion2 = 0x00000200;
-
-    // The attribute flags split into two groups: how the name is given (the low bits) and how the
-    // value is given (the 0x000n0000 bits). Mixing them up is rewarded with ERROR_INVALID_PARAMETER.
-    internal const uint CryptcatAttrNameascii = 0x00000001;
-    internal const uint CryptcatAttrDataascii = 0x00010000;
-    internal const uint CryptcatAttrAuthenticated = 0x10000000;
-
-    // ---- crypt32: hashing a file the way a catalog records it ----
-    //
-    // The subject-interface-package calls live in crypt32, not wintrust, even though everything
-    // else about catalogs is in wintrust.
-
-    [DllImport("crypt32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
-    internal static extern bool CryptSIPRetrieveSubjectGuid(string fileName, IntPtr fileHandle, out Guid subject);
-
-    [DllImport("crypt32.dll", ExactSpelling = true, SetLastError = true)]
-    internal static extern bool CryptSIPLoad(ref Guid subject, uint flags, ref SipDispatchInfo dispatch);
-
-    // SIP_DISPATCH_INFO from mssip.h. The field order is what makes the function pointers land in
-    // the right place, so it follows the header exactly.
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct SipDispatchInfo
-    {
-        public uint Size;
-        public IntPtr Sip;
-        public IntPtr GetSignedDataMsg;
-        public IntPtr PutSignedDataMsg;
-        public IntPtr CreateIndirectData;
-        public IntPtr VerifyIndirectData;
-        public IntPtr RemoveSignedDataMsg;
-    }
-
-    /// <summary>CRYPT_ALGORITHM_IDENTIFIER, held inline inside SIP_SUBJECTINFO.</summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct CryptAlgorithmIdentifier
-    {
-        public IntPtr ObjectId;      // LPSTR
-        public uint ParametersSize;
-        public IntPtr Parameters;
-    }
-
-    // SIP_SUBJECTINFO from mssip.h.
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct SipSubjectInfo
-    {
-        public uint Size;
-        public IntPtr SubjectType;     // GUID*
-        public IntPtr File;            // HANDLE
-        public IntPtr FileName;        // LPCWSTR
-        public IntPtr DisplayName;     // LPCWSTR
-        public uint Reserved1;
-        public uint IntVersion;
-        public IntPtr CryptProvider;
-        public CryptAlgorithmIdentifier DigestAlgorithm;
-        public uint Flags;
-        public uint EncodingType;
-        public uint Reserved2;
-        public uint CapiSettings;
-        public uint SecuritySettings;
-        public uint Index;
-        public uint UnionChoice;
-        public IntPtr Union;
-        public IntPtr ClientData;
-    }
-
-    internal const uint X509AsnEncoding = 0x00000001;
-    internal const uint Pkcs7AsnEncoding = 0x00010000;
+    // A catalog is built from a catalog definition file, the same text file makecat takes: the
+    // header names the catalog, and each entry names a file to cover. Adding members by hand
+    // through CryptCATPutMemberInfo is the obvious-looking alternative and it faults — the members
+    // that call expects are the ones this parser builds.
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    internal delegate bool CryptSipCreateIndirectData(ref SipSubjectInfo subject, ref uint dataSize, IntPtr data);
+    internal delegate void CdfParseError(uint errorArea, uint localError, IntPtr line);
+
+    [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    internal static extern IntPtr CryptCATCDFOpen(string cdfFilePath, CdfParseError? callback);
+
+    /// <summary>Writes the catalog named in the definition file, then frees the parser.</summary>
+    [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = true)]
+    internal static extern bool CryptCATCDFClose(IntPtr cdf);
+
+    [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = true)]
+    internal static extern IntPtr CryptCATCDFEnumMembersByCDFTagEx(IntPtr cdf, IntPtr previousTag,
+        CdfParseError? callback, ref IntPtr member, bool continueOnError, IntPtr reserved);
+
+    [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = true)]
+    internal static extern IntPtr CryptCATCDFEnumCatAttributes(IntPtr cdf, IntPtr previous, CdfParseError? callback);
 
     // ---- mssign32: signing the catalog ----
     //

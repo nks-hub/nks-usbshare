@@ -23,6 +23,26 @@ public abstract class LocalUsbController
 
     public abstract Task<bool> DetachAsync(string busId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Returns the controller on this machine, installing it first if it is missing and can be
+    /// fetched. Nobody has to go and find it themselves; on Windows the operating system asks for
+    /// consent once, which is the only part that cannot be automated away.
+    /// </summary>
+    public static async Task<LocalUsbController?> EnsureAsync(Diagnostics.ActivityLog log,
+        CancellationToken cancellationToken)
+    {
+        // On Windows this always goes through the setup, which returns straight away when the
+        // controller is already there. Asking Locate first would stop at the tool being on disk
+        // and miss the case where its driver has gone.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            var installed = await UsbIpWin2Setup.EnsureInstalledAsync(log, cancellationToken).ConfigureAwait(false);
+            return installed is null ? null : new CommandLineController("usbip-win2", installed);
+        }
+
+        return Locate(log);
+    }
+
     /// <summary>Returns the controller present on this machine, or null when none is installed.</summary>
     public static LocalUsbController? Locate(Diagnostics.ActivityLog log)
     {

@@ -798,12 +798,14 @@ async Task<int> AttachAsync()
     var port = options.Number("port", DefaultPorts.LocalController);
     var busId = await node.PublishToLocalControllerAsync(import, port, stopping.Token);
 
-    var controller = LocalUsbController.Locate(log);
+    // The controller is fetched and installed the first time it is needed, so this is not
+    // something to go and set up beforehand.
+    var controller = await LocalUsbController.EnsureAsync(log, stopping.Token);
     if (controller is null)
     {
         Console.WriteLine();
-        Console.WriteLine("  No virtual USB host controller is installed, so the device cannot be handed to the");
-        Console.WriteLine("  operating system. It is still reachable from this process.");
+        Console.WriteLine("  No virtual USB host controller is installed and one could not be set up, so the");
+        Console.WriteLine("  device cannot be handed to the operating system. It is still reachable from here.");
         Console.WriteLine($"  A controller speaking USB/IP can attach to 127.0.0.1:{node.LocalController.Port} bus id {busId}.");
         Console.WriteLine();
     }

@@ -358,18 +358,25 @@ public sealed class NodeService : IAsyncDisposable
     /// <summary>True when this import has been handed to the machine's own USB stack.</summary>
     public bool IsAttachedToSystem(string importKey) => _attached.ContainsKey(importKey);
 
-    /// <summary>Whether this machine has a virtual USB host controller at all.</summary>
-    public bool SystemAttachAvailable => LocalUsbController.Locate(Log) is not null;
+    /// <summary>
+    /// Whether this machine can hand a device to its own USB stack. On Windows this is true even
+    /// before the controller is installed, because it is fetched when it is first needed; on
+    /// macOS it is false, because no virtual USB device can be created there at all.
+    /// </summary>
+    public bool SystemAttachAvailable
+        => LocalUsbController.Locate(Log) is not null || OperatingSystem.IsWindows();
 
     /// <summary>
     /// Hands an imported device to this machine's virtual USB host controller, so every
-    /// application sees it rather than only this process.
+    /// application sees it rather than only this process. The controller is installed the first
+    /// time it is needed rather than being something to go and set up beforehand.
     /// </summary>
     public async Task AttachToSystemAsync(ActiveImport import, CancellationToken cancellationToken)
     {
-        var controller = LocalUsbController.Locate(Log)
+        var controller = await LocalUsbController.EnsureAsync(Log, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException(
-                "No virtual USB host controller is installed, so the device cannot be handed to the operating system.");
+                "No virtual USB host controller is installed and one could not be set up, so the device " +
+                "cannot be handed to the operating system.");
 
         var busId = await PublishToLocalControllerAsync(import, DefaultPorts.LocalController, cancellationToken)
             .ConfigureAwait(false);

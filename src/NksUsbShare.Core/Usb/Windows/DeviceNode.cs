@@ -22,7 +22,10 @@ public sealed class DeviceNode
     public string InstanceId { get; }
 
     public string? Service => StringProperty(ref DriverNative.DevPkeyDeviceService);
-    public string? FriendlyName => StringProperty(ref DriverNative.DevPkeyDeviceFriendlyName);
+
+    /// <summary>The name to show, falling back to the description as Windows' own tools do.</summary>
+    public string? FriendlyName => StringProperty(ref DriverNative.DevPkeyDeviceFriendlyName)
+                                   ?? StringProperty(ref DriverNative.DevPkeyDeviceDescription);
     public string? DriverInfPath => StringProperty(ref DriverNative.DevPkeyDeviceDriverInfPath);
     public IReadOnlyList<string> HardwareIds => StringListProperty(ref DriverNative.DevPkeyDeviceHardwareIds);
 
@@ -62,6 +65,43 @@ public sealed class DeviceNode
 
     /// <summary>Asks Windows to enumerate this node's children again.</summary>
     public bool Reenumerate() => DriverNative.CM_Reenumerate_DevNode(_handle, 0) == DriverNative.CrSuccess;
+
+    /// <summary>
+    /// True when Windows has parked this device until the machine restarts. Installing a driver
+    /// that filters a whole device class does this to the USB hubs, and every device on them —
+    /// keyboards and mice included — stops working until the stack is rebuilt.
+    /// </summary>
+    public bool NeedsRestart()
+        => DriverNative.CM_Get_DevNode_Status(out _, out var problem, _handle, 0) == DriverNative.CrSuccess
+           && problem == DriverNative.CmProblemNeedRestart;
+
+    /// <summary>Every node under the root, depth first. Used to look for devices in trouble.</summary>
+    public static IEnumerable<DeviceNode> All()
+    {
+        if (DriverNative.CM_Locate_DevNodeW(out var root, null, 0) != DriverNative.CrSuccess) yield break;
+
+        var stack = new Stack<uint>();
+        stack.Push(root);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+
+            if (DriverNative.CM_Get_Child(out var child, current, 0) == DriverNative.CrSuccess)
+            {
+                var walker = child;
+                while (true)
+                {
+                    stack.Push(walker);
+                    if (DriverNative.CM_Get_Sibling(out var sibling, walker, 0) != DriverNative.CrSuccess) break;
+                    walker = sibling;
+                }
+            }
+
+            var id = IdOf(current);
+            if (id is not null) yield return new DeviceNode(current, id);
+        }
+    }
 
     /// <summary>
     /// Finds the present device whose hardware ids include <paramref name="hardwareId"/>. A USB

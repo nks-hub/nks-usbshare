@@ -41,6 +41,12 @@ internal static class DriverNative
     [DllImport("cfgmgr32.dll")]
     internal static extern int CM_Reenumerate_DevNode(uint devInst, uint flags);
 
+    [DllImport("cfgmgr32.dll")]
+    internal static extern int CM_Get_DevNode_Status(out uint status, out uint problem, uint devInst, uint flags);
+
+    /// <summary>CM_PROB_NEED_RESTART: the device is waiting for the machine to be restarted.</summary>
+    internal const uint CmProblemNeedRestart = 14;
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct DevPropKey
     {
@@ -58,6 +64,10 @@ internal static class DriverNative
     internal static DevPropKey DevPkeyDeviceHardwareIds = new("a45c254e-df1c-4efd-8020-67d146a850e0", 3);
     internal static DevPropKey DevPkeyDeviceService = new("a45c254e-df1c-4efd-8020-67d146a850e0", 6);
     internal static DevPropKey DevPkeyDeviceFriendlyName = new("a45c254e-df1c-4efd-8020-67d146a850e0", 14);
+
+    // Plenty of devices have no friendly name and are known only by their description; the tools
+    // that show a "friendly name" are quietly falling back to this one.
+    internal static DevPropKey DevPkeyDeviceDescription = new("a45c254e-df1c-4efd-8020-67d146a850e0", 2);
     internal static DevPropKey DevPkeyDeviceDriverInfPath = new("a8b865dd-2e3d-4094-ad97-e593a70c75d6", 5);
     internal static DevPropKey DevPkeyDeviceAddress = new("a45c254e-df1c-4efd-8020-67d146a850e0", 30);
 

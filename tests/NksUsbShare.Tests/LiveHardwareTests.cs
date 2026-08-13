@@ -89,6 +89,21 @@ public static class LiveHardwareTests
                 "opening a bogus device id");
         });
 
+        // Finding the virtual host controller means walking the whole tree, not just USB devices.
+        TestRunner.Add(suite, "the whole device tree can be walked", () =>
+        {
+            if (!OperatingSystem.IsWindows()) Assert.Skip("this walk is Windows only");
+
+            var all = NksUsbShare.Core.Usb.Windows.DeviceNode.All().ToList();
+            Assert.True(all.Count > 20, $"the walk reaches the whole tree ({all.Count} nodes)");
+
+            var roots = all.Where(n => n.InstanceId.StartsWith(@"ROOT\", StringComparison.OrdinalIgnoreCase)).ToList();
+            Assert.True(roots.Count > 0, $"including software devices under ROOT\\ ({roots.Count})");
+
+            foreach (var node in all.Where(n => n.InstanceId.StartsWith(@"ROOT\USB", StringComparison.OrdinalIgnoreCase)))
+                Console.WriteLine($"          {node.InstanceId}  service={node.Service}  name={node.FriendlyName}");
+        });
+
         // The claim on Windows reads the device tree directly rather than shelling out. This
         // checks that reading against real hardware answers the questions the claim depends on.
         TestRunner.Add(suite, "the device tree answers what a claim needs to know", async () =>

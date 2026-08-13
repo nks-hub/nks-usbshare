@@ -1,5 +1,5 @@
-[![CI](https://github.com/lukyrys/nks-usbshare/actions/workflows/ci.yml/badge.svg)](https://github.com/lukyrys/nks-usbshare/actions/workflows/ci.yml)
-[![Release](https://github.com/lukyrys/nks-usbshare/actions/workflows/release.yml/badge.svg)](https://github.com/lukyrys/nks-usbshare/actions/workflows/release.yml)
+[![CI](https://github.com/nks-hub/nks-usbshare/actions/workflows/ci.yml/badge.svg)](https://github.com/nks-hub/nks-usbshare/actions/workflows/ci.yml)
+[![Release](https://github.com/nks-hub/nks-usbshare/actions/workflows/release.yml/badge.svg)](https://github.com/nks-hub/nks-usbshare/actions/workflows/release.yml)
 [![.NET](https://img.shields.io/badge/.NET-9.0-512BD4)](https://dotnet.microsoft.com/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](#no-dependencies)
 
@@ -313,7 +313,7 @@ NksUsbShare.sln
 ## Support
 
 - Email: dev@nks-hub.cz
-- Bug reports: [GitHub Issues](https://github.com/lukyrys/nks-usbshare/issues)
+- Bug reports: [GitHub Issues](https://github.com/nks-hub/nks-usbshare/issues)
 
 ## License
 

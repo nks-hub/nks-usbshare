@@ -157,10 +157,16 @@ DeviceName   = "$description"
     $infPath = Join-Path $work 'nksusb.inf'
     Set-Content -Path $infPath -Value $inf -Encoding Unicode
 
+    # The steps below take most of the half minute this whole operation costs, and whatever runs
+    # the script shows these lines as they arrive. Without them it is a silent wait that reads as
+    # a hang.
+    Write-Host 'Building the driver catalog...'
     $catalogPath = Join-Path $work 'nksusb.cat'
     New-FileCatalog -Path $work -CatalogFilePath $catalogPath -CatalogVersion 2 | Out-Null
 
     $certificate = Get-SigningCertificate
+
+    Write-Host 'Signing the catalog...'
     $signature = Set-AuthenticodeSignature -FilePath $catalogPath -Certificate $certificate -HashAlgorithm SHA256
     if ($signature.Status -ne 'Valid') {
         throw "The driver catalog could not be signed: $($signature.Status) - $($signature.StatusMessage)"
@@ -172,11 +178,22 @@ DeviceName   = "$description"
 function Invoke-Bind {
     Assert-Elevated
 
-    $device = Get-PnpDevice -PresentOnly | Where-Object {
-        (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction SilentlyContinue).Data -contains $HardwareId
-    } | Select-Object -First 1
+    # A USB instance id begins with its hardware id, so the device can be asked for directly.
+    # The fallback below walks every device and reads its hardware ids, which is correct but takes
+    # the best part of half a minute on a machine with a lot of them.
+    $device = Get-PnpDevice -PresentOnly -InstanceId "$HardwareId\*" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    if (-not $device) {
+        Write-Host 'Looking through every attached device...'
+        $device = Get-PnpDevice -PresentOnly | Where-Object {
+            (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction SilentlyContinue).Data -contains $HardwareId
+        } | Select-Object -First 1
+    }
 
     if (-not $device) { throw "No present device matches hardware id '$HardwareId'." }
+
+    Write-Host "Found $($device.FriendlyName). Preparing a driver package..."
 
     $currentService = (Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Service').Data
     if ($currentService -eq 'WinUSB') {

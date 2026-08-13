@@ -187,7 +187,10 @@ async Task<int> SetShareAsync(bool share)
         return 1;
     }
 
-    var (node, _) = CreateNode(echo: false);
+    // Claiming a device from Windows takes about half a minute of certificate, catalog and
+    // driver work. The helper reports each step, so the log is echoed rather than leaving the
+    // terminal silent for the duration.
+    var (node, _) = CreateNode(echo: share);
     await using var _ = node;
 
     var devices = await node.ListLocalDevicesWithSharesAsync(CancellationToken.None);

@@ -94,15 +94,12 @@ public sealed class WinUsbBinder(ActivityLog log)
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromMinutes(3));
-            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
 
-            var output = File.Exists(transcript) ? await File.ReadAllTextAsync(transcript, CancellationToken.None).ConfigureAwait(false) : "";
-
-            // The helper runs elevated in a hidden window, so its transcript is the only account of
-            // what happened to the device. It belongs in the activity log where it can be read,
-            // not at a level the window filters out.
-            foreach (var line in output.Split('\n').Where(l => l.Trim().Length > 0))
-                log.Info("winusb", line.TrimEnd());
+            // Signing a driver catalog and installing it takes a minute or two. The helper runs
+            // elevated in a hidden window, so its transcript is the only account of what is
+            // happening; it is followed as it is written rather than read at the end, otherwise
+            // the whole operation is a silent wait that looks like a hang.
+            var output = await FollowAsync(process, transcript, timeout.Token).ConfigureAwait(false);
 
             if (output.Trim().Length == 0)
                 log.Warning("winusb", "The elevated helper produced no output at all.");
@@ -128,6 +125,61 @@ public sealed class WinUsbBinder(ActivityLog log)
         finally
         {
             try { File.Delete(transcript); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>
+    /// Waits for the elevated helper, reporting each line of its transcript as it appears. The
+    /// file is opened shared because the helper is writing to it at the same time.
+    /// </summary>
+    private async Task<string> FollowAsync(Process process, string transcript, CancellationToken cancellationToken)
+    {
+        // The whole file is re-read on every poll and lines already reported are counted, rather
+        // than seeking to a saved offset: PowerShell chooses the transcript's encoding itself, and
+        // a character count is not a byte offset once it picks UTF-16.
+        var text = "";
+        var reported = 0;
+
+        while (true)
+        {
+            var finished = process.HasExited;
+
+            // A poll that came back empty means the file was momentarily locked, not that the
+            // helper unsaid what it had already written.
+            var fresh = await ReadSharedAsync(transcript, cancellationToken).ConfigureAwait(false);
+            if (fresh.Length > 0) text = fresh;
+
+            var lines = text.Split('\n');
+
+            // While the helper is still writing, the last line may be half-written, so it waits.
+            var complete = finished ? lines.Length : lines.Length - 1;
+            for (; reported < complete; reported++)
+                if (lines[reported].Trim().Length > 0)
+                    log.Info("winusb", lines[reported].TrimEnd());
+
+            if (finished) break;
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+        }
+
+        return text;
+    }
+
+    private static async Task<string> ReadSharedAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path)) return "";
+
+        try
+        {
+            // The helper still has the file open, so it has to be opened shared.
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            // A transient lock is not worth failing the whole operation for; the next poll retries.
+            return "";
         }
     }
 

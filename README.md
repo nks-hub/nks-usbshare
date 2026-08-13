@@ -1,27 +1,40 @@
 [![CI](https://github.com/nks-hub/nks-usbshare/actions/workflows/ci.yml/badge.svg)](https://github.com/nks-hub/nks-usbshare/actions/workflows/ci.yml)
 [![Release](https://github.com/nks-hub/nks-usbshare/actions/workflows/release.yml/badge.svg)](https://github.com/nks-hub/nks-usbshare/actions/workflows/release.yml)
 [![.NET](https://img.shields.io/badge/.NET-9.0-512BD4)](https://dotnet.microsoft.com/)
-[![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](#no-dependencies)
+[![NuGet packages](https://img.shields.io/badge/NuGet%20packages-0-brightgreen)](#dependencies)
 
 # NKS UsbShare v1.0.0
 
 Share USB devices between computers over an encrypted TCP link — on a LAN, across a VPN, or over
-the internet. The device plugged into one machine becomes usable from another.
+the internet. A flash drive, a phone, a dongle: plug it into one machine, use it from another as
+though it were plugged in there.
 
-Written in C# on .NET 9 with **no third-party dependencies**. Everything it uses ships with the
-operating system or with .NET itself: WinUSB and SetupAPI on Windows, usbfs on Linux, IOKit on
-macOS, WPF, AppKit and GTK for the windows, and the .NET TLS stack for the transport.
+Written in C# on .NET 9. **The solution has no NuGet packages at all** — the wire protocol, the
+descriptor parser, the SCSI and FAT32 readers, the MCP server, the AppKit and GTK bindings and the
+test runner are written here, on top of what the operating system already provides: WinUSB and
+SetupAPI on Windows, usbfs on Linux, IOKit on macOS, and the .NET TLS stack.
+
+One thing cannot be written in user mode at all — the virtual USB controller that makes a remote
+device visible to *every* application on Windows. That is a kernel driver, and it has to be signed
+by someone Windows already trusts. The application **fetches and installs it on its own** the
+first time it is needed; see [Dependencies](#dependencies).
 
 ## Screenshots
 
-| Windows | Linux |
+**The computer a device is plugged into** — everything attached, and what is shared:
+
+![Windows](docs/screenshots/windows.png)
+
+**The computer using it** — a phone attached across the network, listed as a local device:
+
+![A remote device in use](docs/screenshots/windows-remote.png)
+
+| Settings | Linux |
 |---|---|
-| ![Windows](docs/screenshots/windows.png) | ![Linux](docs/screenshots/linux.png) |
+| ![Settings](docs/screenshots/windows-settings.png) | ![Linux](docs/screenshots/linux.png) |
 
 Every window shows the same thing in the same shape: identity and pairing details pinned at the
 top, then a table of devices with a button per row, then the computers allowed in.
-
-![Settings](docs/screenshots/windows-settings.png)
 
 ## What works today
 
@@ -194,11 +207,10 @@ that more user-mode code can close.
 
 **Sharing on Windows** requires the device to be bound to the in-box `winusb.sys` instead of its
 class driver. **The applications do this themselves** — sharing a device Windows is holding asks
-for administrator approval and then hands it over. Nothing has to be installed for that:
-`New-SelfSignedCertificate` provides a signing key, `New-FileCatalog` and
-`Set-AuthenticodeSignature` build and sign the driver catalog, and `pnputil` installs it. No WDK,
-no third-party signing tool, and **Secure Boot stays on** — `winusb.sys` is already signed by
-Microsoft, so only the small package that points at it has to be trusted.
+for administrator approval once and then hands it over. Nothing has to be installed for that: a
+self-signed code-signing certificate, a generated INF and a signed catalog are all produced with
+tooling that ships with Windows, and **Secure Boot stays on**, because `winusb.sys` is already
+signed by Microsoft and only the small package pointing at it has to be trusted.
 
 ```bash
 nksusb share 7          # claims the device from Windows first if it has to
@@ -207,6 +219,18 @@ nksusb giveback         # returns every claimed device to its original driver
 
 In the desktop application the button reads *Claim and share*, and *Sharing → Give devices back*
 undoes it. The same helper is available on its own as `tools/bind-winusb.ps1` for scripted setups.
+
+Two details are worth knowing, because both took real hardware to find:
+
+- A **manufacturer's driver that is WHQL signed outranks this package** no matter what the INF
+  says, because Windows weighs the signature before it weighs how well the hardware id matched. A
+  phone therefore stays on its vendor driver until the choice is forced, which is a documented
+  call rather than a trick.
+- Windows often records the new driver and **leaves the old device stack standing** until the
+  device disappears and comes back. On a composite device such as a phone the old interface nodes
+  keep holding the interfaces and nothing can open it. Restarting the node, restarting the hub and
+  disabling the device are all refused while the machine has a pending reboot, so the claim ends by
+  **cycling the device's hub port** — a replug performed in software, which goes through anyway.
 
 While a device is shared it stops working as its normal self: a flash drive disappears from
 Explorer, a keyboard stops typing. That is what sharing a USB device means on every product that
@@ -226,10 +250,9 @@ Which controller answers depends on the platform:
 - **Windows** has no in-box virtual device. It ships the framework to build one —
   [`UdeCx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/writing-a-ude-client-driver),
   the USB Device Emulation class extension — but a KMDF client driver still has to be written and
-  signed. Rather than duplicate that, `nksusb attach` works with the controller from
-  [usbip-win2](https://github.com/vadimgrn/usbip-win2), which is BSD-2-Clause licensed and ships
-  drivers signed by the *Microsoft Windows Hardware Compatibility Publisher*, so they install on
-  stock Windows 11 with Secure Boot left on. Install it and `nksusb attach` finds it on its own.
+  signed. Rather than duplicate that, the controller from
+  [usbip-win2](https://github.com/vadimgrn/usbip-win2) is used, and **the application installs it
+  itself** the first time a device is attached. Nothing has to be downloaded or set up beforehand.
 - **macOS** cannot do this at all today. DriverKit deliberately drives real hardware only —
   `USBDriverKit` matches on the vendor and product id of a device that is physically present, and
   Apple applies the same policy elsewhere, explicitly refusing `AudioDriverKit` for virtual audio
@@ -263,12 +286,34 @@ A driver is only unavoidable for *arbitrary* devices. Storage, printers and scan
 network protocol both operating systems already speak — iSCSI, IPP, and eSCL — so those three
 classes could be carried with no kernel component anywhere.
 
-## No dependencies
+## Dependencies
 
-There is no NuGet package anywhere in the solution, and none in the test project either. The wire
-protocol, the JSON-RPC of the MCP server, the descriptor parser, the SCSI layer, the FAT32 reader,
-the AppKit and GTK bindings and the test runner are all written here. The only external component
-in the whole project is the optional virtual controller on Windows, which has to be a driver.
+**In the build: none.** There is no NuGet package anywhere in the solution, and none in the test
+project either. The wire protocol, the JSON-RPC of the MCP server, the descriptor parser, the SCSI
+layer, the FAT32 reader, the AppKit and GTK bindings and the test runner are all written here.
+
+**At runtime on Windows: one driver, installed for you.** Handing a remote device to the whole
+operating system needs a virtual USB controller, and only kernel-mode code can provide one. The
+controller comes from [usbip-win2](https://github.com/vadimgrn/usbip-win2) (BSD-2-Clause), whose
+drivers carry a *Microsoft Windows Hardware Compatibility Publisher* signature and therefore
+install on stock Windows with Secure Boot left on.
+
+Nobody has to go and find it. The first time a device is attached, the application:
+
+1. asks the controller's own tool whether it is there and working — the file being on disk is not
+   the same thing, because an uninstall can take the driver and leave the files;
+2. downloads the pinned release (**0.9.7.8**) if it is not;
+3. **checks it against a pinned SHA-256** and refuses to run a file that does not match;
+4. installs it silently, and
+5. restarts any USB controllers Windows parked while installing, so nothing on the machine — a
+   keyboard, a mouse — is left dead waiting for a reboot.
+
+Windows asks for administrator consent once, for the driver installation. That prompt is the only
+part that cannot be taken off the user, and there is no way around it for any product that
+installs a driver.
+
+Linux needs none of this: `vhci_hcd` is already in the kernel and is driven straight through
+sysfs. macOS cannot host a virtual USB device at all, with or without a third-party driver.
 
 ## Build
 
@@ -291,7 +336,13 @@ round trip over a real socket. Tests that need hardware skip themselves when the
 
 ```
 NksUsbShare.sln
-├── src/NksUsbShare.Core/      protocol, security, USB backends, host and client engines
+├── src/NksUsbShare.Core/
+│   ├── Protocol/              the wire format: framing, messages, errors
+│   ├── Security/              TLS, node identity, pairing tokens
+│   ├── Host/                  the side a device is plugged into
+│   ├── Client/                the side using it, incl. the controller setup
+│   ├── Usb/Windows|Linux|Mac/ one backend per platform
+│   └── Storage/               SCSI and FAT32, for reading a disk without a driver
 ├── src/NksUsbShare.Cli/       cross-platform command line
 ├── src/NksUsbShare.Desktop/   WPF application for Windows
 ├── src/NksUsbShare.Gtk/       GTK application for Linux
@@ -301,6 +352,11 @@ NksUsbShare.sln
 ├── tools/bind-winusb.ps1      hands a Windows device to WinUSB and back again
 └── .github/workflows/         CI + Release
 ```
+
+The Windows claim currently runs through `tools/bind-winusb.ps1`, driven from an elevated child
+process. A native replacement is in `Usb/Windows/` — the device tree, the forced driver install
+and the hub port cycle are already native and in use; building the driver catalog without the
+script is not finished, and the file says so plainly rather than pretending otherwise.
 
 ## Contributing
 

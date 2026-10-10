@@ -7,23 +7,21 @@
 [![NuGet packages](https://img.shields.io/badge/NuGet%20packages-0-brightgreen.svg)](#dependencies)
 [![License](https://img.shields.io/badge/license-proprietary-6B7280.svg)](#license)
 
-> Share USB devices between computers over an encrypted TCP link — on a LAN, across a VPN, or over the internet. A flash drive, a phone, a dongle: plug it into one machine, use it from another as though it were plugged in there.
+> Share USB devices between computers over an encrypted TCP link on a LAN, across a VPN or over the internet. A flash drive, a phone, a dongle: plug it into one machine, use it from another as though it were plugged in there.
 
-Written in C# on .NET 9. **The solution has no NuGet packages at all** — the wire protocol, the
-descriptor parser, the SCSI and FAT32 readers, the MCP server, the AppKit and GTK bindings and the
-test runner are written here, on top of what the operating system already provides: WinUSB and
-SetupAPI on Windows, usbfs on Linux, IOKit on macOS, and the .NET TLS stack.
+Written in C# on .NET 9 with no NuGet packages, on top of WinUSB and SetupAPI on Windows, usbfs
+on Linux, IOKit on macOS and the .NET TLS stack.
 
-One thing cannot be written in user mode at all — the virtual USB controller that makes a remote
+One thing cannot be written in user mode: the virtual USB controller that makes a remote
 device visible to *every* application on Windows. That is a kernel driver, and it has to be signed
 by someone Windows already trusts. The application **fetches and installs it on its own** the
 first time it is needed; see [Dependencies](#dependencies).
 
-**The computer a device is plugged into** — everything attached, and what is shared:
+**The computer a device is plugged into:** everything attached, and what is shared:
 
 ![Windows](docs/screenshots/windows.png)
 
-**The computer using it** — a phone attached across the network, listed as a local device:
+**The computer using it:** a phone attached across the network, listed as a local device:
 
 ![A remote device in use](docs/screenshots/windows-remote.png)
 
@@ -68,13 +66,13 @@ Download a self-contained build for your platform from [GitHub Releases](https:/
 
 Or build the desktop application from source:
 
-**Windows** — `dotnet build src/NksUsbShare.Desktop`, then run `NksUsbShare.exe`.
+**Windows:** `dotnet build src/NksUsbShare.Desktop`, then run `NksUsbShare.exe`.
 
-**macOS** — `dotnet publish src/NksUsbShare.Mac -r osx-arm64 --self-contained`. Put the binary in
+**macOS:** `dotnet publish src/NksUsbShare.Mac -r osx-arm64 --self-contained`. Put the binary in
 a `.app` bundle so LaunchServices treats it as a normal application.
 
-**Linux** — `dotnet publish src/NksUsbShare.Gtk -r linux-x64 --self-contained`, then run
-`nksusb-gtk`. On a machine with no display it says so and exits rather than failing obscurely.
+**Linux:** `dotnet publish src/NksUsbShare.Gtk -r linux-x64 --self-contained`, then run
+`nksusb-gtk`. On a machine with no display it prints that and exits.
 
 ## Usage
 
@@ -158,8 +156,8 @@ but has not yet been run on that platform.
 The Windows export path was checked end to end: a USB flash drive plugged into one machine was
 claimed from its class driver, shared, and then read from a Windows 11 virtual machine on another
 host across a VPN. The virtual machine pulled the device and configuration descriptors straight off
-the hardware — mass storage, class 08/06/50, two 512 byte bulk endpoints — proving real transfers
-cross the encrypted link rather than cached metadata.
+the hardware (mass storage, class 08/06/50, two 512 byte bulk endpoints), so real transfers
+crossed the encrypted link, not cached metadata.
 
 ```
 nksusb probe 192.0.2.10 'USB\VID_FFFF&PID_5678\0123456789ABC'
@@ -203,7 +201,7 @@ implemented on the Linux backend.
 | Component | Runtime | Description |
 |-----------|---------|-------------|
 | **NksUsbShare.Core** | .NET 9 | Wire protocol, TLS, USB backends, host and client engines |
-| **NksUsbShare.Cli** | .NET 9 | `nksusb` — the whole feature set from a terminal, all platforms |
+| **NksUsbShare.Cli** | .NET 9 | `nksusb` command line with every feature, all platforms |
 | **NksUsbShare.Desktop** | .NET 9 (WPF) | Windows application |
 | **NksUsbShare.Gtk** | .NET 9 (GTK 3) | Linux application, plain P/Invoke |
 | **NksUsbShare.Mac** | .NET 9 (AppKit) | macOS application, on the Objective-C runtime |
@@ -231,14 +229,13 @@ implemented on the Linux backend.
 - **Optional mutual TLS**, where a client must present a key the host already knows before the
   handshake completes at all.
 
-## The driver question
+## Kernel driver limits
 
 Two rows in the table above are blocked on the same fact: **only kernel-mode code can take a USB
-device away from its class driver, or present a virtual one.** This is not an implementation gap
-that more user-mode code can close.
+device away from its class driver, or present a virtual one.**
 
 **Sharing on Windows** requires the device to be bound to the in-box `winusb.sys` instead of its
-class driver. **The applications do this themselves** — sharing a device Windows is holding asks
+class driver. **The applications do this themselves:** sharing a device Windows is holding asks
 for administrator approval once and then hands it over. Nothing has to be installed for that: a
 self-signed code-signing certificate, a generated INF and a signed catalog are all produced with
 tooling that ships with Windows, and **Secure Boot stays on**, because `winusb.sys` is already
@@ -250,53 +247,50 @@ nksusb giveback         # returns every claimed device to its original driver
 ```
 
 In the desktop application the button reads *Claim and share*, and *Sharing → Give devices back*
-undoes it. Both run the application again with administrator rights — there is no script and no
-interpreter in the way; the driver work is the application's own code.
+undoes it. Both run the application again with administrator rights. There is no script or
+interpreter in between; the driver work is the application's own code.
 
-Two details are worth knowing, because both took real hardware to find:
+Two details only showed up on real hardware:
 
 - A **manufacturer's driver that is WHQL signed outranks this package** no matter what the INF
   says, because Windows weighs the signature before it weighs how well the hardware id matched. A
-  phone therefore stays on its vendor driver until the choice is forced, which is a documented
-  call rather than a trick.
+  phone therefore stays on its vendor driver until the choice is forced through a documented call.
 - Windows often records the new driver and **leaves the old device stack standing** until the
   device disappears and comes back. On a composite device such as a phone the old interface nodes
   keep holding the interfaces and nothing can open it. Restarting the node, restarting the hub and
   disabling the device are all refused while the machine has a pending reboot, so the claim ends by
-  **cycling the device's hub port** — a replug performed in software, which goes through anyway.
+  **cycling the device's hub port**, a software replug that Windows allows even then.
 
 While a device is shared it stops working as its normal self: a flash drive disappears from
-Explorer, a keyboard stops typing. That is what sharing a USB device means on every product that
-does this, and giving it back restores the original driver.
+Explorer, a keyboard stops typing. Giving it back restores the original driver.
 
 **Using a remote device as though it were plugged in locally** needs a virtual USB host controller.
 Only kernel-mode code can create one, so this is the single piece the project does not provide
 itself. What it provides instead is everything around it: `nksusb attach` imports the device,
 publishes it on a plain USB/IP endpoint bound to **loopback only**, and lets the machine's own
-controller attach to that. The network hop is still carried by the encrypted link — the plaintext
+controller attach to that. The network hop is still carried by the encrypted link; the plaintext
 protocol never leaves the machine.
 
 Which controller answers depends on the platform:
 
 - **Linux** already has one in the kernel, `vhci_hcd`. Nothing has to be written, installed or
   signed.
-- **Windows** has no in-box virtual device. It ships the framework to build one —
-  [`UdeCx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/writing-a-ude-client-driver),
-  the USB Device Emulation class extension — but a KMDF client driver still has to be written and
+- **Windows** has no in-box virtual device. It ships the framework to build one,
+  [`UdeCx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/writing-a-ude-client-driver)
+  (the USB Device Emulation class extension), but a KMDF client driver still has to be written and
   signed. Rather than duplicate that, the controller from
   [usbip-win2](https://github.com/vadimgrn/usbip-win2) is used, and **the application installs it
-  itself** the first time a device is attached. Nothing has to be downloaded or set up beforehand.
-- **macOS** cannot do this at all today. DriverKit deliberately drives real hardware only —
+  itself** the first time a device is attached.
+- **macOS** cannot do this at all today. DriverKit drives real hardware only:
   `USBDriverKit` matches on the vendor and product id of a device that is physically present, and
   Apple applies the same policy elsewhere, explicitly refusing `AudioDriverKit` for virtual audio
   devices. The one class Apple does permit to be invented is HID, through `HIDDriverKit`'s virtual
   device entitlement. Everything else means a kernel extension, which on Apple Silicon requires the
-  user to drop Startup Security to "Reduced Security" from Recovery. Every commercial product in
-  this space still ships a kext on macOS for the same reason.
+  user to drop Startup Security to "Reduced Security" from Recovery.
 
 On macOS, where no virtual device can be created at all, a remote device is still reachable
-through `RemoteUsbDevice` — real control, bulk and interrupt transfers from your own code — the
-operating system's driver stack simply does not see it. For storage that is enough to be useful:
+through `RemoteUsbDevice` (control, bulk and interrupt transfers from your own code), but the
+operating system's driver stack does not see it. For storage that is enough:
 `nksusb storage` speaks SCSI over Bulk-Only Transport and reads the medium directly.
 
 ```
@@ -316,7 +310,7 @@ nksusb storage 192.0.2.10 'USB\VID_FFFF&PID_5678\0123456789ABC'
 That listing was produced on a Mac, from a flash drive plugged into a Windows machine.
 
 A driver is only unavoidable for *arbitrary* devices. Storage, printers and scanners each have a
-network protocol both operating systems already speak — iSCSI, IPP, and eSCL — so those three
+network protocol both operating systems already speak (iSCSI, IPP and eSCL), so those three
 classes could be carried with no kernel component anywhere.
 
 ## Dependencies
@@ -331,19 +325,16 @@ controller comes from [usbip-win2](https://github.com/vadimgrn/usbip-win2) (BSD-
 drivers carry a *Microsoft Windows Hardware Compatibility Publisher* signature and therefore
 install on stock Windows with Secure Boot left on.
 
-Nobody has to go and find it. The first time a device is attached, the application:
+The first time a device is attached, the application:
 
-1. asks the controller's own tool whether it is there and working — the file being on disk is not
-   the same thing, because an uninstall can take the driver and leave the files;
+1. asks the controller's own tool whether it is there and working; a file on disk proves nothing, because an uninstall can take the driver and leave the files;
 2. downloads the pinned release (**0.9.7.8**) if it is not;
 3. **checks it against a pinned SHA-256** and refuses to run a file that does not match;
 4. installs it silently, and
-5. restarts any USB controllers Windows parked while installing, so nothing on the machine — a
-   keyboard, a mouse — is left dead waiting for a reboot.
+5. restarts any USB controllers Windows parked while installing, so no keyboard or mouse on the
+   machine is left dead waiting for a reboot.
 
-Windows asks for administrator consent once, for the driver installation. That prompt is the only
-part that cannot be taken off the user, and there is no way around it for any product that
-installs a driver.
+Windows asks for administrator consent once, for the driver installation.
 
 Linux needs none of this: `vhci_hcd` is already in the kernel and is driven straight through
 sysfs. macOS cannot host a virtual USB device at all, with or without a third-party driver.
@@ -385,8 +376,8 @@ dotnet publish src/NksUsbShare.Cli -c Release -r linux-x64 --self-contained -p:P
 dotnet publish src/NksUsbShare.Cli -c Release -r osx-arm64 --self-contained -p:PublishSingleFile=true
 ```
 
-No test framework is used, for the same reason nothing else is: tests are plain methods, failures
-are exceptions, and the exit code is what matters. The suite covers the wire protocol, descriptor
+No test framework is used: tests are plain methods, failures are exceptions, and the exit code
+reports the result. The suite covers the wire protocol, descriptor
 parsing, the TLS and pairing layer, per-device access lists, blocking, and a full host-to-client
 round trip over a real socket. Tests that need hardware skip themselves when there is none.
 

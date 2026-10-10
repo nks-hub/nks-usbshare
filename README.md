@@ -1,13 +1,13 @@
+# NKS UsbShare
+
 [![CI](https://github.com/nks-hub/nks-usbshare/actions/workflows/ci.yml/badge.svg)](https://github.com/nks-hub/nks-usbshare/actions/workflows/ci.yml)
-[![Release](https://github.com/nks-hub/nks-usbshare/actions/workflows/release.yml/badge.svg)](https://github.com/nks-hub/nks-usbshare/actions/workflows/release.yml)
-[![.NET](https://img.shields.io/badge/.NET-9.0-512BD4)](https://dotnet.microsoft.com/)
-[![NuGet packages](https://img.shields.io/badge/NuGet%20packages-0-brightgreen)](#dependencies)
+[![GitHub Release](https://img.shields.io/github/v/release/nks-hub/nks-usbshare)](https://github.com/nks-hub/nks-usbshare/releases)
+[![.NET](https://img.shields.io/badge/.NET-9.0-512BD4.svg)](https://dotnet.microsoft.com/)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-0078D4.svg)](#requirements)
+[![NuGet packages](https://img.shields.io/badge/NuGet%20packages-0-brightgreen.svg)](#dependencies)
+[![License](https://img.shields.io/badge/license-proprietary-6B7280.svg)](#license)
 
-# NKS UsbShare v1.0.0
-
-Share USB devices between computers over an encrypted TCP link — on a LAN, across a VPN, or over
-the internet. A flash drive, a phone, a dongle: plug it into one machine, use it from another as
-though it were plugged in there.
+> Share USB devices between computers over an encrypted TCP link — on a LAN, across a VPN, or over the internet. A flash drive, a phone, a dongle: plug it into one machine, use it from another as though it were plugged in there.
 
 Written in C# on .NET 9. **The solution has no NuGet packages at all** — the wire protocol, the
 descriptor parser, the SCSI and FAT32 readers, the MCP server, the AppKit and GTK bindings and the
@@ -18,8 +18,6 @@ One thing cannot be written in user mode at all — the virtual USB controller t
 device visible to *every* application on Windows. That is a kernel driver, and it has to be signed
 by someone Windows already trusts. The application **fetches and installs it on its own** the
 first time it is needed; see [Dependencies](#dependencies).
-
-## Screenshots
 
 **The computer a device is plugged into** — everything attached, and what is shared:
 
@@ -35,6 +33,111 @@ first time it is needed; see [Dependencies](#dependencies).
 
 Every window shows the same thing in the same shape: identity and pairing details pinned at the
 top, then a table of devices with a button per row, then the computers allowed in.
+
+## Features
+
+- 🔌 **USB over the network** - Plug a device into one computer and use it from another, on a LAN, across a VPN or over the internet
+- 🔒 **Encrypted and pinned** - TLS 1.3 (1.2 floor), self-signed P-384 identities pinned on first use, 125-bit pairing tokens, optional mutual TLS
+- 🛂 **Per-device access control** - Allow lists of client fingerprints per device, named clients and instant blocking
+- 🖥️ **Native apps on three platforms** - WPF on Windows, GTK 3 on Linux, AppKit on macOS, plus the cross-platform `nksusb` CLI
+- 🤖 **MCP server** - Manage sharing, pairing and imports from AI agents over the Model Context Protocol
+- 🧲 **Driver claim on Windows** - Moves a device from its class driver onto `winusb.sys` and gives it back, with Secure Boot left on
+- 🧩 **Whole-OS attach** - Presents a remote device to the local USB stack through `vhci_hcd` on Linux or the usbip-win2 controller on Windows, installed automatically
+- 💾 **Driverless storage access** - Reads a remote disk directly over SCSI Bulk-Only Transport with a built-in FAT32 reader
+- 📦 **Zero NuGet packages** - Protocol, MCP JSON-RPC, descriptor parser, SCSI/FAT32 readers, UI bindings and test runner are all in-repo
+
+## Requirements
+
+- Windows x64, Linux x64 or macOS arm64 (release builds are self-contained)
+- .NET 9 SDK to build from source
+- Windows: administrator consent once to claim a device or install the virtual USB controller
+- Linux: the in-kernel `vhci_hcd` controller for whole-OS attach; GTK 3 and a display for the desktop app
+- macOS: whole-OS attach is not possible today; remote devices are reachable through `RemoteUsbDevice` and `nksusb storage`
+
+## Installation
+
+Download a self-contained build for your platform from [GitHub Releases](https://github.com/nks-hub/nks-usbshare/releases):
+
+| Package | Platforms |
+|---------|-----------|
+| `NksUsbShare.Desktop` | win-x64 |
+| `NksUsbShare.Gtk` | linux-x64 |
+| `NksUsbShare.Mac` | osx-arm64 |
+| `NksUsbShare.Cli` | win-x64, linux-x64, osx-arm64 |
+| `NksUsbShare.Mcp` | win-x64, linux-x64, osx-arm64 |
+
+Or build the desktop application from source:
+
+**Windows** — `dotnet build src/NksUsbShare.Desktop`, then run `NksUsbShare.exe`.
+
+**macOS** — `dotnet publish src/NksUsbShare.Mac -r osx-arm64 --self-contained`. Put the binary in
+a `.app` bundle so LaunchServices treats it as a normal application.
+
+**Linux** — `dotnet publish src/NksUsbShare.Gtk -r linux-x64 --self-contained`, then run
+`nksusb-gtk`. On a machine with no display it says so and exits rather than failing obscurely.
+
+## Usage
+
+### Desktop application
+
+The Windows, macOS and Linux applications all accept `--home <dir>` like the terminal application, so a second node can be run beside
+the real one without disturbing its settings.
+
+### Command line (all platforms)
+
+```bash
+dotnet build src/NksUsbShare.Cli
+
+nksusb list                          # local devices and what is shared
+nksusb share 3                       # share the third device, claiming it from Windows if needed
+nksusb giveback                      # return every claimed device to its original driver
+nksusb serve                         # run the node until interrupted
+
+nksusb pair 192.0.2.10 ABCDE-FGHIJ-KLMNO-PQRST-UVWXY
+nksusb remote 192.0.2.10             # what that host offers
+nksusb import 192.0.2.10 <device-id> # hold a device until interrupted
+nksusb attach 192.0.2.10 <device-id> # hand it to this machine's USB stack
+nksusb storage 192.0.2.10 <device-id># read a remote disk directly, without a driver
+
+nksusb clients                       # computers that have connected here
+nksusb access 3 anyone               # offer the third device to any paired computer
+nksusb access 3 laptop workshop      # or only to those two
+nksusb block laptop                  # refuse a computer even with the right token
+```
+
+A computer can be named by its name or by any unambiguous part of its key fingerprint. These
+commands write the settings file, so a node that is already running picks them up when it restarts;
+the windowed applications change their own running node straight away.
+
+Settings live in `%APPDATA%\nks-usbshare` or `~/.config/nks-usbshare`, overridable with
+`NKS_USBSHARE_HOME` or `--home`.
+
+### MCP server
+
+```json
+{
+  "mcpServers": {
+    "nks-usbshare": {
+      "type": "stdio",
+      "command": "<path-to>/nksusb-mcp"
+    }
+  }
+}
+```
+
+| Tool | Description |
+|------|-------------|
+| `node_info` | Identity, platform, pairing token and listening address |
+| `list_local_devices` | Local USB devices and whether each one is shared |
+| `share_device` / `unshare_device` | Offer a device, optionally claiming it first |
+| `release_claimed_devices` | Give every claimed device back to its original driver |
+| `list_clients` | Computers that have connected to this node |
+| `set_client_blocked` | Refuse or re-admit a computer |
+| `set_device_access` | Choose which computers may use a shared device |
+| `list_hosts` / `pair_host` / `forget_host` | Manage paired computers |
+| `list_remote_devices` | What another computer offers |
+| `import_device` / `release_device` / `list_imports` | Hold and release remote devices |
+| `recent_activity` | The node's activity log |
 
 ## What works today
 
@@ -127,77 +230,6 @@ implemented on the Linux backend.
   holding is released, so blocking does not wait for it to come back.
 - **Optional mutual TLS**, where a client must present a key the host already knows before the
   handshake completes at all.
-
-## Quick start
-
-### Desktop application
-
-**Windows** — `dotnet build src/NksUsbShare.Desktop`, then run `NksUsbShare.exe`.
-
-**macOS** — `dotnet publish src/NksUsbShare.Mac -r osx-arm64 --self-contained`. Put the binary in
-a `.app` bundle so LaunchServices treats it as a normal application.
-
-**Linux** — `dotnet publish src/NksUsbShare.Gtk -r linux-x64 --self-contained`, then run
-`nksusb-gtk`. On a machine with no display it says so and exits rather than failing obscurely.
-
-All of them accept `--home <dir>` like the terminal application, so a second node can be run beside
-the real one without disturbing its settings.
-
-### Command line (all platforms)
-
-```bash
-dotnet build src/NksUsbShare.Cli
-
-nksusb list                          # local devices and what is shared
-nksusb share 3                       # share the third device, claiming it from Windows if needed
-nksusb giveback                      # return every claimed device to its original driver
-nksusb serve                         # run the node until interrupted
-
-nksusb pair 192.0.2.10 ABCDE-FGHIJ-KLMNO-PQRST-UVWXY
-nksusb remote 192.0.2.10             # what that host offers
-nksusb import 192.0.2.10 <device-id> # hold a device until interrupted
-nksusb attach 192.0.2.10 <device-id> # hand it to this machine's USB stack
-nksusb storage 192.0.2.10 <device-id># read a remote disk directly, without a driver
-
-nksusb clients                       # computers that have connected here
-nksusb access 3 anyone               # offer the third device to any paired computer
-nksusb access 3 laptop workshop      # or only to those two
-nksusb block laptop                  # refuse a computer even with the right token
-```
-
-A computer can be named by its name or by any unambiguous part of its key fingerprint. These
-commands write the settings file, so a node that is already running picks them up when it restarts;
-the windowed applications change their own running node straight away.
-
-Settings live in `%APPDATA%\nks-usbshare` or `~/.config/nks-usbshare`, overridable with
-`NKS_USBSHARE_HOME` or `--home`.
-
-### MCP server
-
-```json
-{
-  "mcpServers": {
-    "nks-usbshare": {
-      "type": "stdio",
-      "command": "<path-to>/nksusb-mcp"
-    }
-  }
-}
-```
-
-| Tool | Description |
-|------|-------------|
-| `node_info` | Identity, platform, pairing token and listening address |
-| `list_local_devices` | Local USB devices and whether each one is shared |
-| `share_device` / `unshare_device` | Offer a device, optionally claiming it first |
-| `release_claimed_devices` | Give every claimed device back to its original driver |
-| `list_clients` | Computers that have connected to this node |
-| `set_client_blocked` | Refuse or re-admit a computer |
-| `set_device_access` | Choose which computers may use a shared device |
-| `list_hosts` / `pair_host` / `forget_host` | Manage paired computers |
-| `list_remote_devices` | What another computer offers |
-| `import_device` / `release_device` / `list_imports` | Hold and release remote devices |
-| `recent_activity` | The node's activity log |
 
 ## The driver question
 
@@ -316,23 +348,6 @@ installs a driver.
 Linux needs none of this: `vhci_hcd` is already in the kernel and is driven straight through
 sysfs. macOS cannot host a virtual USB device at all, with or without a third-party driver.
 
-## Build
-
-```bash
-dotnet build NksUsbShare.sln
-dotnet run --project tests/NksUsbShare.Tests
-
-# self-contained binaries
-dotnet publish src/NksUsbShare.Cli -c Release -r win-x64  --self-contained -p:PublishSingleFile=true
-dotnet publish src/NksUsbShare.Cli -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true
-dotnet publish src/NksUsbShare.Cli -c Release -r osx-arm64 --self-contained -p:PublishSingleFile=true
-```
-
-No test framework is used, for the same reason nothing else is: tests are plain methods, failures
-are exceptions, and the exit code is what matters. The suite covers the wire protocol, descriptor
-parsing, the TLS and pairing layer, per-device access lists, blocking, and a full host-to-client
-round trip over a real socket. Tests that need hardware skip themselves when there is none.
-
 ## Project structure
 
 ```
@@ -358,7 +373,26 @@ package built and its catalog signed through wintrust and mssign32, the install 
 and newdev, and the hub port cycle through a hub ioctl. It runs in an elevated copy of the same
 executable, because changing a driver needs administrator rights.
 
+## Development
+
+```bash
+dotnet build NksUsbShare.sln
+dotnet run --project tests/NksUsbShare.Tests
+
+# self-contained binaries
+dotnet publish src/NksUsbShare.Cli -c Release -r win-x64  --self-contained -p:PublishSingleFile=true
+dotnet publish src/NksUsbShare.Cli -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true
+dotnet publish src/NksUsbShare.Cli -c Release -r osx-arm64 --self-contained -p:PublishSingleFile=true
+```
+
+No test framework is used, for the same reason nothing else is: tests are plain methods, failures
+are exceptions, and the exit code is what matters. The suite covers the wire protocol, descriptor
+parsing, the TLS and pairing layer, per-device access lists, blocking, and a full host-to-client
+round trip over a real socket. Tests that need hardware skip themselves when there is none.
+
 ## Contributing
+
+Contributions are welcome! For major changes, please open an issue first.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
@@ -368,15 +402,15 @@ executable, because changing a driver needs administrator rights.
 
 ## Support
 
-- Email: dev@nks-hub.cz
-- Bug reports: [GitHub Issues](https://github.com/nks-hub/nks-usbshare/issues)
+- 📧 **Email:** dev@nks-hub.cz
+- 🐛 **Bug reports:** [GitHub Issues](https://github.com/nks-hub/nks-usbshare/issues)
 
 ## License
 
-Private — NKS Development
+Proprietary — NKS Development. The repository has no LICENSE file; publishing the source does not grant a license to use, copy, modify or distribute it. The usbip-win2 controller installed at runtime is BSD-2-Clause.
 
 ---
 
 <p align="center">
-  Made by <a href="https://github.com/nks-hub">NKS Hub</a>
+  Made with ❤️ by <a href="https://github.com/nks-hub">NKS Hub</a>
 </p>
